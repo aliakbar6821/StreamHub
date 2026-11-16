@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,7 +75,14 @@ fun App() {
                         selected = selected == i,
                         onClick = { selected = i },
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = { Text(tab.label) },
+                        label = {
+                            Text(
+                                tab.label,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        },
                     )
                 }
             }
