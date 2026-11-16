@@ -1,72 +1,63 @@
 package dev.lynx.streamhub
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import dev.lynx.streamhub.api.HomeSection
 import dev.lynx.streamhub.api.MediaItem
 import dev.lynx.streamhub.api.MediaType
+import kotlinx.coroutines.delay
 
 @Composable
 fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
     val context = LocalContext.current
-    val genres = listOf("All", "Movies", "Series")
-    var genre by remember { mutableStateOf("All") }
+    var filter by remember { mutableStateOf("All") }
 
     LaunchedEffect(Unit) {
         if (!Session.loaded) Session.reload(context)
     }
 
-    val sections = Session.sections.map { sec ->
-        HomeSection(
-            sec.title,
-            sec.items.filter {
-                Safety.allowed(it) && when (genre) {
-                    "Movies" -> it.type == MediaType.MOVIE
-                    "Series" -> it.type != MediaType.MOVIE
-                    else -> true
-                }
-            },
-        )
-    }.filter { it.items.isNotEmpty() }
-    val featured = sections.firstOrNull()?.items?.firstOrNull()
+    val base = Session.sections
+        .map { s -> HomeSection(s.title, s.items.filter { Safety.allowed(it) }) }
+        .filter { it.items.isNotEmpty() }
+    val chips = listOf("All", "Movies", "Series") + base.map { it.title }.distinct()
+    val active = if (filter in chips) filter else "All"
+    val sections = when (active) {
+        "All" -> base
+        "Movies" -> base
+            .map { s -> HomeSection(s.title, s.items.filter { it.type == MediaType.MOVIE }) }
+            .filter { it.items.isNotEmpty() }
+        "Series" -> base
+            .map { s -> HomeSection(s.title, s.items.filter { it.type != MediaType.MOVIE }) }
+            .filter { it.items.isNotEmpty() }
+        else -> base.filter { it.title == active }
+    }
+    val hero = base.flatMap { it.items }.distinctBy { it.id }.take(5)
+    val grid = active != "All"
 
     LazyColumn(Modifier.fillMaxWidth()) {
         item {
@@ -75,7 +66,12 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("StreamHub", style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    "StreamHub",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
                 IconButton(onClick = onSearch) {
                     Icon(Icons.Filled.Search, contentDescription = "Search")
                 }
@@ -83,19 +79,13 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
         }
         item {
             LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(genres) { g ->
-                    FilterChip(
-                        selected = genre == g,
-                        onClick = { genre = g },
-                        label = { Text(g) },
-                    )
-                }
+                items(chips) { c -> PillChip(c, active == c) { filter = c } }
             }
         }
-        item { Spacer(Modifier.height(16.dp)) }
+        item { Spacer(Modifier.height(8.dp)) }
 
         if (Session.loading) {
             item {
@@ -106,7 +96,7 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
         } else if (Session.loaded && Session.extensions.isEmpty()) {
             item {
                 Text(
-                    "No extensions installed. Install an extension APK, then open You > Reload extensions.",
+                    "No extensions installed. Open You > Repositories to install one, then Reload extensions.",
                     modifier = Modifier.padding(16.dp),
                 )
             }
@@ -114,66 +104,108 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
 
         Session.error?.let { msg ->
             item {
-                Text(
-                    msg,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(16.dp),
-                )
+                Text(msg, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
             }
         }
 
-        if (featured != null) {
-            item { FeaturedCard(featured, onOpen) }
-            item { Spacer(Modifier.height(16.dp)) }
+        if (!grid && hero.isNotEmpty()) {
+            item { Hero(hero, onOpen) }
+            item { Spacer(Modifier.height(20.dp)) }
         }
 
-        if (genre == "All" && Store.history.isNotEmpty()) {
-        item {
-            Text(
-                "Continue watching",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-        }
-        item {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                items(Store.history.toList()) { h -> PosterCard(h.item, onOpen) }
-            }
-        }
-        item { Spacer(Modifier.height(16.dp)) }
-    }
-    sections.forEach { section ->
-            item {
-                Text(
-                    section.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-            }
+        if (!grid && Store.history.isNotEmpty()) {
+            item { SectionTitle("Continue watching") }
             item {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(section.items) { PosterCard(it, onOpen) }
+                    items(Store.history.toList()) { h -> HistoryCard(h, onOpen) }
                 }
             }
-            item { Spacer(Modifier.height(16.dp)) }
+            item { Spacer(Modifier.height(20.dp)) }
+        }
+
+        sections.forEach { section ->
+            item { SectionTitle(section.title) }
+            if (grid) {
+                items(section.items.chunked(3)) { row ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        row.forEach { PosterCard(it, onOpen, Modifier.weight(1f)) }
+                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            } else {
+                item {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(section.items) { PosterCard(it, onOpen) }
+                    }
+                }
+                item { Spacer(Modifier.height(20.dp)) }
+            }
         }
     }
 }
 
 @Composable
-private fun FeaturedCard(item: MediaItem, onOpen: (MediaItem) -> Unit) {
+private fun SectionTitle(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun Hero(items: List<MediaItem>, onOpen: (MediaItem) -> Unit) {
+    val pager = rememberPagerState(pageCount = { items.size })
+    LaunchedEffect(items.size) {
+        while (items.size > 1) {
+            delay(5000)
+            pager.animateScrollToPage((pager.currentPage + 1) % items.size)
+        }
+    }
+    Column {
+        HorizontalPager(
+            state = pager,
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            pageSpacing = 12.dp,
+        ) { page -> HeroCard(items[page], onOpen) }
+        Row(
+            Modifier.fillMaxWidth().padding(top = 8.dp),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            repeat(items.size) { i ->
+                val on = i == pager.currentPage
+                Box(
+                    Modifier
+                        .padding(3.dp)
+                        .size(if (on) 8.dp else 6.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                        ),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeroCard(item: MediaItem, onOpen: (MediaItem) -> Unit) {
     Box(
         Modifier
-            .padding(horizontal = 16.dp)
             .fillMaxWidth()
             .aspectRatio(16f / 9f)
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(20.dp))
             .clickable { onOpen(item) }
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
@@ -181,42 +213,82 @@ private fun FeaturedCard(item: MediaItem, onOpen: (MediaItem) -> Unit) {
             model = item.poster,
             contentDescription = item.title,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+            modifier = Modifier.fillMaxSize(),
         )
-        Text(
-            item.title,
-            color = Color.White,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.55f))
-                .padding(12.dp),
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD0F0F14)))),
         )
+        Column(Modifier.align(Alignment.BottomStart).padding(14.dp)) {
+            Text(
+                item.title,
+                color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { onOpen(item) },
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Watch now")
+            }
+        }
     }
 }
 
 @Composable
-private fun PosterCard(item: MediaItem, onOpen: (MediaItem) -> Unit) {
-    Column(Modifier.width(120.dp).clickable { onOpen(item) }) {
-        AsyncImage(
-            model = item.poster,
-            contentDescription = item.title,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
+private fun HistoryCard(h: HistoryEntry, onOpen: (MediaItem) -> Unit) {
+    val frac = if (h.durationMs > 0) (h.positionMs.toFloat() / h.durationMs).coerceIn(0f, 1f) else 0f
+    Column(Modifier.width(200.dp).clickable { onOpen(h.item) }) {
+        Box(
+            Modifier
                 .fillMaxWidth()
-                .aspectRatio(2f / 3f)
+                .aspectRatio(16f / 9f)
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
-        )
+        ) {
+            AsyncImage(
+                model = h.item.poster,
+                contentDescription = h.item.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000)))),
+            )
+            Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.align(Alignment.Center).size(36.dp),
+            )
+            LinearProgressIndicator(
+                progress = { frac },
+                modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = Color(0x66FFFFFF),
+            )
+        }
         Spacer(Modifier.height(6.dp))
         Text(
-            item.title,
-            maxLines = 2,
+            h.item.title,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+        )
+        Text(
+            "Episode ${h.episodeNumber.toInt()}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

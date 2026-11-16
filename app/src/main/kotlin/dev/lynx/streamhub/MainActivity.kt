@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Favorite
@@ -17,6 +18,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -76,16 +78,17 @@ fun App() {
         }
     } else if (showSearch) {
         BackHandler { showSearch = false }
-        Surface(Modifier.fillMaxSize()) {
+        Surface(Modifier.fillMaxSize().statusBarsPadding()) {
             SearchScreen(
                 onBack = { showSearch = false },
                 onOpen = { openItem = it },
             )
         }
     } else {
+        val primary = MaterialTheme.colorScheme.primary
         Scaffold(
             bottomBar = {
-                NavigationBar {
+                NavigationBar(containerColor = NavBg) {
                     tabs.forEachIndexed { i, tab ->
                         NavigationBarItem(
                             selected = selected == i,
@@ -94,12 +97,17 @@ fun App() {
                             label = {
                                 Text(tab.label, fontSize = 11.sp, maxLines = 1, softWrap = false)
                             },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = primary,
+                                selectedTextColor = primary,
+                                indicatorColor = primary.copy(alpha = 0.18f),
+                            ),
                         )
                     }
                 }
             },
         ) { padding ->
-            Box(Modifier.padding(padding).fillMaxSize()) {
+            Box(Modifier.padding(padding).fillMaxSize().statusBarsPadding()) {
                 when (selected) {
                     0 -> HomeScreen(
                         onOpen = { openItem = it },
