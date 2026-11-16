@@ -17,15 +17,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,49 +40,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import dev.lynx.streamhub.api.HomeSection
 import dev.lynx.streamhub.api.MediaItem
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-
-private data class LoadResult(
-    val extCount: Int,
-    val sections: List<HomeSection>,
-    val error: String?,
-)
 
 @Composable
-fun HomeScreen(onOpen: (MediaItem) -> Unit) {
+fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
     val context = LocalContext.current
     val genres = listOf("All", "Action", "Adventure", "Comedy", "Drama")
     var genre by remember { mutableStateOf("All") }
-    var reloadKey by remember { mutableIntStateOf(0) }
-    var loading by remember { mutableStateOf(true) }
-    var extCount by remember { mutableIntStateOf(0) }
-    var sections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
-    var error by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(reloadKey) {
-        loading = true
-        val result = withContext(Dispatchers.IO) {
-            val exts = ExtensionLoader.loadAll(context)
-            val all = mutableListOf<HomeSection>()
-            var err: String? = null
-            for (e in exts) {
-                try {
-                    val s = e.getHome(); s.forEach { sec -> sec.items.forEach { Session.owner[it.id] = e } }; all.addAll(s)
-                } catch (t: Throwable) {
-                    err = "${e.name}: ${t.message}"
-                }
-            }
-            LoadResult(exts.size, all, err)
-        }
-        extCount = result.extCount
-        sections = result.sections
-        error = result.error
-        loading = false
+    LaunchedEffect(Unit) {
+        if (!Session.loaded) Session.reload(context)
     }
 
+    val sections = Session.sections
     val featured = sections.firstOrNull()?.items?.firstOrNull()
 
     LazyColumn(Modifier.fillMaxWidth()) {
@@ -91,7 +63,9 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit) {
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text("StreamHub", style = MaterialTheme.typography.headlineMedium)
-                TextButton(onClick = { reloadKey++ }) { Text("Reload") }
+                IconButton(onClick = onSearch) {
+                    Icon(Icons.Filled.Search, contentDescription = "Search")
+                }
             }
         }
         item {
@@ -110,22 +84,22 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit) {
         }
         item { Spacer(Modifier.height(16.dp)) }
 
-        if (loading) {
+        if (Session.loading) {
             item {
                 Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
             }
-        } else if (extCount == 0) {
+        } else if (Session.loaded && Session.extensions.isEmpty()) {
             item {
                 Text(
-                    "No extensions installed. Install an extension APK, then tap Reload.",
+                    "No extensions installed. Install an extension APK, then open You > Reload extensions.",
                     modifier = Modifier.padding(16.dp),
                 )
             }
         }
 
-        error?.let { msg ->
+        Session.error?.let { msg ->
             item {
                 Text(
                     msg,
@@ -168,7 +142,8 @@ private fun FeaturedCard(item: MediaItem, onOpen: (MediaItem) -> Unit) {
             .padding(horizontal = 16.dp)
             .fillMaxWidth()
             .aspectRatio(16f / 9f)
-            .clip(RoundedCornerShape(24.dp)).clickable { onOpen(item) }
+            .clip(RoundedCornerShape(24.dp))
+            .clickable { onOpen(item) }
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
         AsyncImage(

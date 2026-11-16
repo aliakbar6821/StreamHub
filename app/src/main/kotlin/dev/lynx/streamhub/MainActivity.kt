@@ -59,6 +59,7 @@ fun App() {
     var selected by remember { mutableIntStateOf(0) }
     var openItem by remember { mutableStateOf<MediaItem?>(null) }
     var playing by remember { mutableStateOf<Pair<Extension, Episode>?>(null) }
+    var showSearch by remember { mutableStateOf(false) }
 
     val p = playing
     val item = openItem
@@ -73,6 +74,14 @@ fun App() {
                 item = item,
                 onBack = { openItem = null },
                 onPlay = { ext, ep -> playing = ext to ep },
+            )
+        }
+    } else if (showSearch) {
+        BackHandler { showSearch = false }
+        Surface(Modifier.fillMaxSize()) {
+            SearchScreen(
+                onBack = { showSearch = false },
+                onOpen = { openItem = it },
             )
         }
     } else {
@@ -93,8 +102,14 @@ fun App() {
             },
         ) { padding ->
             Box(Modifier.padding(padding).fillMaxSize()) {
-                if (selected == 0) HomeScreen(onOpen = { openItem = it })
-                else Placeholder(tabs[selected].label)
+                when (selected) {
+                    0 -> HomeScreen(
+                        onOpen = { openItem = it },
+                        onSearch = { showSearch = true },
+                    )
+                    4 -> YouScreen()
+                    else -> Placeholder(tabs[selected].label)
+                }
             }
         }
     }
