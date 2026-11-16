@@ -27,13 +27,41 @@ object Repos {
         }
     }
 
+    private fun cs3(arr: JSONArray): List<RepoExt> = (0 until arr.length()).mapNotNull { i ->
+        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+        val internal = o.optString("internalName", o.optString("name"))
+        RepoExt(o.optString("name", internal), "cs3:$internal", o.optLong("version", 1L), o.optString("url"))
+    }
+
+    private fun cs3(arr: JSONArray): List<RepoExt> = (0 until arr.length()).mapNotNull { i ->
+        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+        val internal = o.optString("internalName", o.optString("name"))
+        RepoExt(o.optString("name", internal), "cs3:$internal", o.optLong("version", 1L), o.optString("url"))
+    }
+
     suspend fun fetch(url: String): List<RepoExt> = withContext(Dispatchers.IO) {
         val text = get(url).trim()
-        val arr = if (text.startsWith("[")) JSONArray(text) else JSONObject(text).getJSONArray("extensions")
-        (0 until arr.length()).map { i ->
-            val o = arr.getJSONObject(i)
-            RepoExt(o.getString("name"), o.getString("pkg"), o.optLong("version", 1L), o.getString("apk"))
+        if (text.startsWith("[")) {
+            val arr = JSONArray(text)
+            if (arr.length() > 0 && arr.getJSONObject(0).has("internalName")) return@withContext cs3(arr)
+            return@withContext parseNative(arr)
         }
+        val o = JSONObject(text)
+        if (o.has("extensions")) return@withContext parseNative(o.getJSONArray("extensions"))
+        if (o.has("pluginLists")) {
+            val lists = o.getJSONArray("pluginLists")
+            val out = mutableListOf<RepoExt>()
+            for (i in 0 until lists.length()) {
+                try { out.addAll(cs3(JSONArray(get(lists.getString(i)).trim()))) } catch (_: Throwable) {}
+            }
+            return@withContext out
+        }
+        throw Exception("Unrecognized repository format")
+    }
+
+    private fun parseNative(arr: JSONArray): List<RepoExt> = (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i)
+        RepoExt(o.getString("name"), o.getString("pkg"), o.optLong("version", 1L), o.getString("apk"))
     }
 
     fun installedVersion(context: Context, pkg: String): Long? = try {

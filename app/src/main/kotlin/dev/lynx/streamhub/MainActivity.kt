@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         Store.init(this)
+        PlayerPrefs.init(this)
         setContent {
             StreamHubTheme {
                 App()

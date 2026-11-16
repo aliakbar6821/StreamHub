@@ -1,28 +1,23 @@
 package dev.lynx.streamhub
-
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import dev.lynx.streamhub.api.Episode
 import kotlinx.coroutines.delay
 import java.io.File
@@ -31,62 +26,49 @@ import java.io.File
 fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
     val context = LocalContext.current
     var tick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1500)
-            tick++
-        }
-    }
+    LaunchedEffect(Unit) { while (true) { delay(1000); tick++ } }
     Column(Modifier.fillMaxSize()) {
-        Text(
-            "Downloads",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
-        )
+        Text("Downloads", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold,
+            modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 8.dp))
         if (Store.downloads.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                Text("No downloads yet. Tap the arrow next to an episode.")
+                Text("No downloads yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        } else {
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(Store.downloads.toList()) { d ->
-                    val st = remember(tick, d.downloadId) { Downloader.status(context, d.downloadId) }
-                    val exists = File(d.path).let { it.exists() && it.length() > 0 }
-                    val done = st.first == 8 || (st.first == -1 && exists)
-                    val label = when {
-                        done -> "Downloaded"
-                        st.first == 16 -> "Failed"
-                        st.first == 4 -> "Paused"
-                        st.first == -1 -> "Unavailable"
-                        else -> "Downloading ${st.second}%"
-                    }
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable(enabled = done && exists) {
-                                val ep = Episode(
-                                    id = d.episodeId,
-                                    number = d.episodeNumber,
-                                    title = d.episodeTitle,
-                                )
-                                onPlay(PlayRequest(null, d.item, ep, 0L, d.path))
-                            }
-                            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                d.item.title,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.titleSmall,
-                            )
-                            Text(
-                                "E${d.episodeNumber.toInt()} \u2022 $label",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
+        } else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(Store.downloads.toList()) { d ->
+                val st = remember(tick, d.downloadId) { Downloader.status(context, d.downloadId) }
+                val f = File(d.path)
+                val exists = f.exists() && f.length() > 0
+                val done = st.first == 8 || (st.first == -1 && exists)
+                val failed = st.first == 16
+                val label = when {
+                    done -> "Downloaded \u2022 ${f.length() / 1048576} MB"
+                    failed -> "Failed"
+                    st.first == 4 || st.first == 2 && st.second == 0 -> "Waiting\u2026"
+                    st.first == -1 -> "Unavailable"
+                    else -> "Downloading ${st.second}%"
+                }
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable(enabled = done && exists) {
+                        onPlay(PlayRequest(null, d.item, Episode(d.episodeId, d.episodeNumber, d.episodeTitle), 0L, d.path))
+                    }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    AsyncImage(model = d.item.poster, contentDescription = null, contentScale = ContentScale.Crop,
+                        modifier = Modifier.width(110.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.background))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(d.item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                        Text("E${d.episodeNumber.toInt()} \u2022 $label", style = MaterialTheme.typography.bodySmall,
+                            color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (!done && !failed) {
+                            Spacer(Modifier.height(6.dp))
+                            LinearProgressIndicator(progress = { st.second / 100f }, modifier = Modifier.fillMaxWidth())
                         }
-                        TextButton(onClick = { Downloader.remove(context, d) }) { Text("Delete") }
+                    }
+                    IconButton(onClick = { Downloader.remove(context, d) }) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Delete")
                     }
                 }
             }

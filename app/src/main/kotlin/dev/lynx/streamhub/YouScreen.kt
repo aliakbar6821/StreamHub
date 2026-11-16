@@ -152,6 +152,8 @@ fun ExtensionsScreen() {
             available[r]?.forEach { e ->
                 val installed = remember(refresh, busy) { Repos.installedVersion(context, e.pkg) }
                 val label = when {
+                    e.pkg.startsWith("cs3:") -> "Unsupported"
+                    e.pkg.startsWith("cs3:") -> "Unsupported"
                     installed == null -> "Install"
                     installed < e.version -> "Update"
                     else -> "Installed"
@@ -162,10 +164,10 @@ fun ExtensionsScreen() {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(e.name, style = MaterialTheme.typography.titleSmall)
-                        Text("v${e.version}", style = MaterialTheme.typography.bodySmall)
+                        Text(if (e.pkg.startsWith("cs3:")) "CloudStream plugin (.cs3), not compatible" else "v${e.version}", style = MaterialTheme.typography.bodySmall)
                     }
                     Button(
-                        enabled = busy == null && label != "Installed",
+                        enabled = busy == null && label != "Installed" && label != "Unsupported",
                         onClick = {
                             scope.launch {
                                 busy = e.pkg

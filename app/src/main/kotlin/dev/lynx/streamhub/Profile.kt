@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -42,6 +43,12 @@ fun YouScreen() {
     var page by remember { mutableStateOf(0) }
     var edit by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
+
+    if (page == 2) {
+        BackHandler { page = 0 }
+        PlayerSettingsScreen(onBack = { page = 0 })
+        return
+    }
 
     if (page == 1) {
         BackHandler { page = 0 }
@@ -77,6 +84,8 @@ fun YouScreen() {
         Spacer(Modifier.height(8.dp))
         Column(Modifier.clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
             MenuRow(Icons.Filled.Settings, "Extensions & repositories") { page = 1 }
+            HorizontalDivider(color = MaterialTheme.colorScheme.background, thickness = 2.dp)
+            MenuRow(Icons.Filled.PlayArrow, "Player settings") { page = 2 }
             HorizontalDivider(color = MaterialTheme.colorScheme.background, thickness = 2.dp)
             MenuRow(Icons.Filled.Info, "About") { about = true }
         }
