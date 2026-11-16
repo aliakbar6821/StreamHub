@@ -46,19 +46,28 @@ class ArchiveExtension : Extension {
         val root = JSONObject(get("$base/metadata/$id"))
         val meta = root.optJSONObject("metadata")
         val files = root.optJSONArray("files") ?: JSONArray()
-        val episodes = mutableListOf<Episode>()
+        val exts = listOf("mp4", "m4v", "webm", "ogv", "mpeg", "mpg", "avi", "mkv")
+        val videos = mutableListOf<Pair<String, Long>>()
         for (i in 0 until files.length()) {
-            val name = files.getJSONObject(i).optString("name")
-            if (name.endsWith(".mp4", ignoreCase = true)) {
-                episodes.add(
-                    Episode(
-                        id = "$id/$name",
-                        number = (episodes.size + 1).toFloat(),
-                        title = name.substringBeforeLast('.'),
-                    )
-                )
+            val f = files.getJSONObject(i)
+            val name = f.optString("name")
+            val ext = name.substringAfterLast('.', "").lowercase()
+            if (ext in exts && !name.contains("thumb", true) && !name.contains("sample", true)) {
+                videos.add(name to f.optString("size").toLongOrNull().let { it ?: 0L })
             }
         }
+        // Prefer the best format available, then list every file in that format
+        val bestExt = exts.firstOrNull { e -> videos.any { it.first.substringAfterLast('.').lowercase() == e } }
+        val episodes = videos
+            .filter { it.first.substringAfterLast('.').lowercase() == bestExt }
+            .sortedBy { it.first }
+            .mapIndexed { idx, v ->
+                Episode(
+                    id = "$id/${v.first}",
+                    number = (idx + 1).toFloat(),
+                    title = v.first.substringBeforeLast('.'),
+                )
+            }
         val item = MediaItem(
             id = id,
             title = meta?.optString("title").takeUnless { it.isNullOrBlank() } ?: id,
