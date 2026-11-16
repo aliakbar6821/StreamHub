@@ -114,7 +114,7 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
         }
 
         if (!grid && Store.history.isNotEmpty()) {
-            item { SectionTitle("Continue watching") }
+            item { SectionTitle("Watch History") }
             item {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
@@ -264,12 +264,14 @@ private fun HistoryCard(h: HistoryEntry, onOpen: (MediaItem) -> Unit) {
                     .fillMaxSize()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000)))),
             )
-            Icon(
-                Icons.Filled.PlayArrow,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.align(Alignment.Center).size(36.dp),
-            )
+            Text(
+if (frac >= 0.95f) "Watched" else "${((h.durationMs - h.positionMs) / 60000).coerceAtLeast(1)}m left",
+color = Color.White,
+style = MaterialTheme.typography.labelSmall,
+modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+.clip(RoundedCornerShape(10.dp)).background(Color(0xAA000000))
+.padding(horizontal = 8.dp, vertical = 3.dp),
+)
             LinearProgressIndicator(
                 progress = { frac },
                 modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp),
