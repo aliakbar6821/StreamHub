@@ -1,5 +1,6 @@
 package dev.lynx.streamhub
 
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,31 +26,49 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
-import dev.lynx.streamhub.api.Episode
-import dev.lynx.streamhub.api.Extension
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.io.File
 
 @OptIn(UnstableApi::class)
 @Composable
-fun PlayerScreen(ext: Extension, episode: Episode, onBack: () -> Unit) {
+fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
     val context = LocalContext.current
     val holder = remember { arrayOfNulls<ExoPlayer>(1) }
     var player by remember { mutableStateOf<ExoPlayer?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(episode.id) {
+    fun saveProgress() {
+        val p = holder[0] ?: return
+        val pos = p.currentPosition
+        val dur = if (p.duration > 0) p.duration else 0L
+        if (pos <= 0L) return
+        val extId = req.ext?.id ?: Store.extIdFor(req.item.id) ?: ""
+        Store.record(req.item, extId, req.episode, pos, dur)
+    }
+
+    LaunchedEffect(req.episode.id) {
         try {
-            val streams = withContext(Dispatchers.IO) { ext.getStreams(episode.id) }
-            val s = streams.firstOrNull() ?: throw IllegalStateException("No streams found")
-            val factory = DefaultHttpDataSource.Factory()
-                .setUserAgent("StreamHub/0.1")
-                .setAllowCrossProtocolRedirects(true)
-                .setDefaultRequestProperties(s.headers)
-            val p = ExoPlayer.Builder(context)
-                .setMediaSourceFactory(DefaultMediaSourceFactory(factory))
-                .build()
-            p.setMediaItem(MediaItem.fromUri(s.url))
+            val local = req.localPath
+            val p: ExoPlayer
+            if (local != null) {
+                p = ExoPlayer.Builder(context).build()
+                p.setMediaItem(MediaItem.fromUri(Uri.fromFile(File(local))))
+            } else {
+                val ext = req.ext ?: throw IllegalStateException("Extension not found. Go back and reload.")
+                val streams = withContext(Dispatchers.IO) { ext.getStreams(req.episode.id) }
+                val s = streams.firstOrNull() ?: throw IllegalStateException("No streams found")
+                val factory = DefaultHttpDataSource.Factory()
+                    .setUserAgent("StreamHub/0.1")
+                    .setAllowCrossProtocolRedirects(true)
+                    .setDefaultRequestProperties(s.headers)
+                p = ExoPlayer.Builder(context)
+                    .setMediaSourceFactory(DefaultMediaSourceFactory(factory))
+                    .build()
+                p.setMediaItem(MediaItem.fromUri(s.url))
+            }
+            if (req.startMs > 5000L) p.seekTo(req.startMs - 3000L)
             p.prepare()
             p.playWhenReady = true
             holder[0] = p
@@ -59,8 +78,18 @@ fun PlayerScreen(ext: Extension, episode: Episode, onBack: () -> Unit) {
         }
     }
 
+    LaunchedEffect(player) {
+        if (player != null) {
+            while (true) {
+                delay(5000)
+                saveProgress()
+            }
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
+            saveProgress()
             holder[0]?.release()
             holder[0] = null
         }

@@ -1,0 +1,11 @@
+{
+  "name": "StreamHub Extensions",
+  "extensions": [
+    {
+      "name": "Internet Archive",
+      "pkg": "dev.lynx.streamhub.ext.archive",
+      "version": 1,
+      "apk": "https://github.com/aliakbar6821/StreamHub/releases/download/latest/ext-archive-debug.apk"
+    }
+  ]
+}

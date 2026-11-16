@@ -30,13 +30,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.sp
-import dev.lynx.streamhub.api.Episode
-import dev.lynx.streamhub.api.Extension
 import dev.lynx.streamhub.api.MediaItem
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Store.init(this)
         setContent {
             MaterialTheme {
                 App()
@@ -58,22 +57,21 @@ fun App() {
     )
     var selected by remember { mutableIntStateOf(0) }
     var openItem by remember { mutableStateOf<MediaItem?>(null) }
-    var playing by remember { mutableStateOf<Pair<Extension, Episode>?>(null) }
+    var playing by remember { mutableStateOf<PlayRequest?>(null) }
     var showSearch by remember { mutableStateOf(false) }
 
     val p = playing
     val item = openItem
-
     if (p != null) {
         BackHandler { playing = null }
-        PlayerScreen(p.first, p.second, onBack = { playing = null })
+        PlayerScreen(p, onBack = { playing = null })
     } else if (item != null) {
         BackHandler { openItem = null }
         Surface(Modifier.fillMaxSize()) {
             DetailsScreen(
-                item = item,
+                media = item,
                 onBack = { openItem = null },
-                onPlay = { ext, ep -> playing = ext to ep },
+                onPlay = { ext, ep, start -> playing = PlayRequest(ext, item, ep, start, null) },
             )
         }
     } else if (showSearch) {
@@ -107,6 +105,8 @@ fun App() {
                         onOpen = { openItem = it },
                         onSearch = { showSearch = true },
                     )
+                    2 -> MyListScreen(onOpen = { openItem = it })
+                    3 -> DownloadsScreen(onPlay = { playing = it })
                     4 -> YouScreen()
                     else -> Placeholder(tabs[selected].label)
                 }

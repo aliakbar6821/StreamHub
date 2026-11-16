@@ -40,19 +40,32 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import dev.lynx.streamhub.api.HomeSection
 import dev.lynx.streamhub.api.MediaItem
+import dev.lynx.streamhub.api.MediaType
 
 @Composable
 fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
     val context = LocalContext.current
-    val genres = listOf("All", "Action", "Adventure", "Comedy", "Drama")
+    val genres = listOf("All", "Movies", "Series")
     var genre by remember { mutableStateOf("All") }
 
     LaunchedEffect(Unit) {
         if (!Session.loaded) Session.reload(context)
     }
 
-    val sections = Session.sections
+    val sections = Session.sections.map { sec ->
+        HomeSection(
+            sec.title,
+            sec.items.filter {
+                Safety.allowed(it) && when (genre) {
+                    "Movies" -> it.type == MediaType.MOVIE
+                    "Series" -> it.type != MediaType.MOVIE
+                    else -> true
+                }
+            },
+        )
+    }.filter { it.items.isNotEmpty() }
     val featured = sections.firstOrNull()?.items?.firstOrNull()
 
     LazyColumn(Modifier.fillMaxWidth()) {
@@ -114,7 +127,25 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
             item { Spacer(Modifier.height(16.dp)) }
         }
 
-        sections.forEach { section ->
+        if (genre == "All" && Store.history.isNotEmpty()) {
+        item {
+            Text(
+                "Continue watching",
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+        item {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(Store.history.toList()) { h -> PosterCard(h.item, onOpen) }
+            }
+        }
+        item { Spacer(Modifier.height(16.dp)) }
+    }
+    sections.forEach { section ->
             item {
                 Text(
                     section.title,

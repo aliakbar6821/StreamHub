@@ -67,6 +67,7 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
         Session.recent.remove(term)
         Session.recent.add(0, term)
         while (Session.recent.size > 8) Session.recent.removeAt(Session.recent.size - 1)
+        Store.saveRecent()
         scope.launch {
             loading = true
             error = null
@@ -128,7 +129,7 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Text("Recent searches", style = MaterialTheme.typography.titleMedium)
-                            TextButton(onClick = { Session.recent.clear() }) { Text("Clear") }
+                            TextButton(onClick = { Session.recent.clear(); Store.saveRecent() }) { Text("Clear") }
                         }
                     }
                     items(Session.recent.toList()) { term ->
@@ -152,7 +153,7 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
                 if (Session.results.isEmpty()) {
                     item { Text("No results", modifier = Modifier.padding(16.dp)) }
                 }
-                items(Session.results) { item -> ResultRow(item, onOpen) }
+                items(Session.results.filter { Safety.allowed(it) }) { item -> ResultRow(item, onOpen) }
             }
         }
     }

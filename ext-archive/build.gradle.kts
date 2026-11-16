@@ -25,3 +25,17 @@ android {
 dependencies {
     compileOnly(project(":api"))
 }
+
+val ks = rootProject.file("keystore/debug.keystore")
+if (ks.exists()) {
+    android {
+        signingConfigs {
+            getByName("debug") {
+                storeFile = ks
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+}
