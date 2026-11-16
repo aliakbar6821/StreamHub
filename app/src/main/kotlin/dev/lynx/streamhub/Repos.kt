@@ -33,12 +33,6 @@ object Repos {
         RepoExt(o.optString("name", internal), "cs3:$internal", o.optLong("version", 1L), o.optString("url"))
     }
 
-    private fun cs3(arr: JSONArray): List<RepoExt> = (0 until arr.length()).mapNotNull { i ->
-        val o = arr.optJSONObject(i) ?: return@mapNotNull null
-        val internal = o.optString("internalName", o.optString("name"))
-        RepoExt(o.optString("name", internal), "cs3:$internal", o.optLong("version", 1L), o.optString("url"))
-    }
-
     suspend fun fetch(url: String): List<RepoExt> = withContext(Dispatchers.IO) {
         val text = get(url).trim()
         if (text.startsWith("[")) {
