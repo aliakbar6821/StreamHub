@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="StreamHub: Internet Archive"
+        android:allowBackup="false">
+        <meta-data
+            android:name="streamhub.extension.class"
+            android:value="dev.lynx.streamhub.ext.archive.ArchiveExtension" />
+    </application>
+</manifest>

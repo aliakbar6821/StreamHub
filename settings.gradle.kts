@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "StreamHub"
-include(":app", ":api")
+include(":app", ":api", ":ext-archive")
