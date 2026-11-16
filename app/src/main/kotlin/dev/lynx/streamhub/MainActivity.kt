@@ -37,7 +37,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Store.init(this)
         setContent {
-            MaterialTheme {
+            StreamHubTheme {
                 App()
             }
         }
