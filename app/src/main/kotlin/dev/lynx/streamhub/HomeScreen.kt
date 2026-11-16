@@ -1,6 +1,7 @@
 package dev.lynx.streamhub
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,7 +50,7 @@ private data class LoadResult(
 )
 
 @Composable
-fun HomeScreen() {
+fun HomeScreen(onOpen: (MediaItem) -> Unit) {
     val context = LocalContext.current
     val genres = listOf("All", "Action", "Adventure", "Comedy", "Drama")
     var genre by remember { mutableStateOf("All") }
@@ -67,7 +68,7 @@ fun HomeScreen() {
             var err: String? = null
             for (e in exts) {
                 try {
-                    all.addAll(e.getHome())
+                    val s = e.getHome(); s.forEach { sec -> sec.items.forEach { Session.owner[it.id] = e } }; all.addAll(s)
                 } catch (t: Throwable) {
                     err = "${e.name}: ${t.message}"
                 }
@@ -135,7 +136,7 @@ fun HomeScreen() {
         }
 
         if (featured != null) {
-            item { FeaturedCard(featured) }
+            item { FeaturedCard(featured, onOpen) }
             item { Spacer(Modifier.height(16.dp)) }
         }
 
@@ -152,7 +153,7 @@ fun HomeScreen() {
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(section.items) { PosterCard(it) }
+                    items(section.items) { PosterCard(it, onOpen) }
                 }
             }
             item { Spacer(Modifier.height(16.dp)) }
@@ -161,13 +162,13 @@ fun HomeScreen() {
 }
 
 @Composable
-private fun FeaturedCard(item: MediaItem) {
+private fun FeaturedCard(item: MediaItem, onOpen: (MediaItem) -> Unit) {
     Box(
         Modifier
             .padding(horizontal = 16.dp)
             .fillMaxWidth()
             .aspectRatio(16f / 9f)
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(24.dp)).clickable { onOpen(item) }
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
         AsyncImage(
@@ -192,8 +193,8 @@ private fun FeaturedCard(item: MediaItem) {
 }
 
 @Composable
-private fun PosterCard(item: MediaItem) {
-    Column(Modifier.width(120.dp)) {
+private fun PosterCard(item: MediaItem, onOpen: (MediaItem) -> Unit) {
+    Column(Modifier.width(120.dp).clickable { onOpen(item) }) {
         AsyncImage(
             model = item.poster,
             contentDescription = item.title,

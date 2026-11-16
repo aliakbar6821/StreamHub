@@ -2,6 +2,7 @@ package dev.lynx.streamhub
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,16 +18,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.sp
+import dev.lynx.streamhub.api.Episode
+import dev.lynx.streamhub.api.Extension
+import dev.lynx.streamhub.api.MediaItem
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,25 +57,45 @@ fun App() {
         NavTab("You", Icons.Filled.Person),
     )
     var selected by remember { mutableIntStateOf(0) }
+    var openItem by remember { mutableStateOf<MediaItem?>(null) }
+    var playing by remember { mutableStateOf<Pair<Extension, Episode>?>(null) }
 
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                tabs.forEachIndexed { i, tab ->
-                    NavigationBarItem(
-                        selected = selected == i,
-                        onClick = { selected = i },
-                        icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = {
-                            Text(tab.label, fontSize = 11.sp, maxLines = 1, softWrap = false)
-                        },
-                    )
+    val p = playing
+    val item = openItem
+
+    if (p != null) {
+        BackHandler { playing = null }
+        PlayerScreen(p.first, p.second, onBack = { playing = null })
+    } else if (item != null) {
+        BackHandler { openItem = null }
+        Surface(Modifier.fillMaxSize()) {
+            DetailsScreen(
+                item = item,
+                onBack = { openItem = null },
+                onPlay = { ext, ep -> playing = ext to ep },
+            )
+        }
+    } else {
+        Scaffold(
+            bottomBar = {
+                NavigationBar {
+                    tabs.forEachIndexed { i, tab ->
+                        NavigationBarItem(
+                            selected = selected == i,
+                            onClick = { selected = i },
+                            icon = { Icon(tab.icon, contentDescription = tab.label) },
+                            label = {
+                                Text(tab.label, fontSize = 11.sp, maxLines = 1, softWrap = false)
+                            },
+                        )
+                    }
                 }
+            },
+        ) { padding ->
+            Box(Modifier.padding(padding).fillMaxSize()) {
+                if (selected == 0) HomeScreen(onOpen = { openItem = it })
+                else Placeholder(tabs[selected].label)
             }
-        },
-    ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            if (selected == 0) HomeScreen() else Placeholder(tabs[selected].label)
         }
     }
 }
