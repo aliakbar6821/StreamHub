@@ -48,6 +48,7 @@ fun DetailsScreen(
     var details by remember { mutableStateOf<MediaDetails?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var expanded by remember { mutableStateOf(false) }
+    var sheetEp by remember { mutableStateOf<Episode?>(null) }
     val ext = Session.owner[media.id] ?: Store.ownerOf(media.id)
     val last = Store.historyFor(media.id)
 
@@ -96,6 +97,7 @@ fun DetailsScreen(
     ).joinToString("  \u2022  ")
 
     Box(Modifier.fillMaxSize()) {
+        sheetEp?.let { DownloadSheet(media, it, ext) { sheetEp = null } }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
             item {
                 Box(
@@ -271,7 +273,7 @@ fun DetailsScreen(
                                 tint = MaterialTheme.colorScheme.secondary,
                             )
                         }
-                        IconButton(onClick = { download(ep) }) {
+                        IconButton(onClick = { sheetEp = ep }) {
                             Icon(
                                 if (Store.hasDownload(ep.id)) Icons.Filled.Check else Icons.Filled.KeyboardArrowDown,
                                 contentDescription = "Download",

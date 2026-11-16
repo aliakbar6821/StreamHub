@@ -1,6 +1,7 @@
 package dev.lynx.streamhub
 
 import android.os.Bundle
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -37,6 +38,7 @@ import dev.lynx.streamhub.api.MediaItem
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         Store.init(this)
         setContent {
             StreamHubTheme {
@@ -88,7 +90,7 @@ fun App() {
         val primary = MaterialTheme.colorScheme.primary
         Scaffold(
             bottomBar = {
-                NavigationBar(containerColor = NavBg) {
+                NavigationBar(containerColor = MaterialTheme.colorScheme.background) {
                     tabs.forEachIndexed { i, tab ->
                         NavigationBarItem(
                             selected = selected == i,
@@ -113,7 +115,8 @@ fun App() {
                         onOpen = { openItem = it },
                         onSearch = { showSearch = true },
                     )
-                    2 -> MyListScreen(onOpen = { openItem = it })
+                     1 -> ScheduleScreen()
+                     2 -> MyListScreen(onOpen = { openItem = it })
                     3 -> DownloadsScreen(onPlay = { playing = it })
                     4 -> YouScreen()
                     else -> Placeholder(tabs[selected].label)
