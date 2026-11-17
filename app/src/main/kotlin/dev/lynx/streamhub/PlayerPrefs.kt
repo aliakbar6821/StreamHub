@@ -42,6 +42,23 @@ object PlayerPrefs {
         get() = p?.getFloat("uiScale", 0.82f) ?: 0.82f
         set(v) { p?.edit()?.putFloat("uiScale", v)?.apply() }
 
+    var autoSkip: Boolean
+        get() = p?.getBoolean("autoSkip", false) ?: false
+        set(v) { p?.edit()?.putBoolean("autoSkip", v)?.apply() }
+
+    var subFont: String
+        get() = p?.getString("subFont", "default") ?: "default"
+        set(v) { p?.edit()?.putString("subFont", v)?.apply() }
+
+    var subBold: Boolean
+        get() = p?.getBoolean("subBold", true) ?: true
+        set(v) { p?.edit()?.putBoolean("subBold", v)?.apply() }
+
+    /** Vertical position in percent from the top (higher = lower on screen). */
+    var subPos: Float
+        get() = p?.getFloat("subPos", 92f) ?: 92f
+        set(v) { p?.edit()?.putFloat("subPos", v)?.apply() }
+
     var subScale: Float
         get() = p?.getFloat("subScale", 1f) ?: 1f
         set(v) { p?.edit()?.putFloat("subScale", v)?.apply() }

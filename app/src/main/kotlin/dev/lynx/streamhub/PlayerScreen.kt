@@ -263,6 +263,12 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
     var resize by remember { mutableIntStateOf(PlayerPrefs.resize) }
     var subScale by remember { mutableFloatStateOf(PlayerPrefs.subScale) }
     var autoNext by remember { mutableStateOf(PlayerPrefs.autoNext) }
+    var autoSkip by remember { mutableStateOf(PlayerPrefs.autoSkip) }
+    var subFont by remember { mutableStateOf(PlayerPrefs.subFont) }
+    var subBold by remember { mutableStateOf(PlayerPrefs.subBold) }
+    var subPos by remember { mutableFloatStateOf(PlayerPrefs.subPos) }
+    var skippedFor by remember { mutableStateOf("") }
+    var dlSheet by remember { mutableStateOf(false) }
     var scrub by remember { mutableStateOf<Float?>(null) }
 
     val http = remember {
@@ -621,6 +627,17 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
 
     LaunchedEffect(speed) { exo.setPlaybackSpeed(speed) }
 
+    LaunchedEffect(posMs, autoSkip) {
+        if (autoSkip && isPlaying && skippedFor != ep.id &&
+            req.item.type != dev.lynx.streamhub.api.MediaType.MOVIE &&
+            durMs > 600_000L && posMs in 2000L..25000L
+        ) {
+            skippedFor = ep.id
+            exo.seekTo(posMs + 85_000L)
+            showHud("Intro skipped")
+        }
+    }
+
     LaunchedEffect(hudStamp) {
         if (hud != null) {
             delay(900)
@@ -678,7 +695,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             },
             update = { v ->
                 v.resizeMode = resize
-                v.subtitleView?.setFractionalTextSize(0.0533f * subScale)
+                v.subtitleView?.let { applySubtitleStyle(it, subFont, subBold, subScale, subPos) }
             },
             modifier = Modifier.fillMaxSize(),
         )
@@ -848,6 +865,29 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             }
         }
 
+        // skip intro button
+        if (controls && !locked && page.isEmpty() &&
+            req.item.type != dev.lynx.streamhub.api.MediaType.MOVIE &&
+            durMs > 600_000L && posMs in 3000L..240000L
+        ) {
+            Text(
+                "Skip \u25B6\u2759",
+                color = Color.White,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 64.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xCC000000))
+                    .clickable {
+                        seekBy(85_000L)
+                        showHud("+85s")
+                        poke++
+                    }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
+
         // unlock button
         FadeVis(
             visible = locked && controls,
@@ -938,6 +978,10 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
         }
         }
 
+        if (dlSheet) {
+            DownloadSheet(req.item, ep, req.ext ?: Store.ownerOf(req.item.id)) { dlSheet = false }
+        }
+
         // settings panel
         if (page.isNotEmpty()) {
             val none = remember { MutableInteractionSource() }
@@ -971,6 +1015,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                     "speed" -> "Playback speed"
                                     "source" -> "Source"
                                     "episodes" -> "Episodes"
+                                    "substyle" -> "Subtitle style"
                                     else -> "Settings"
                                 },
                                 color = Color.White,
@@ -989,9 +1034,13 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                             when (page) {
                                 "main" -> {
                                     item {
+                                        OptionRow("Quality", if (qualityH < 0) "Auto" else "${qualityH}p") { page = "quality" }
+                                    }
+                                    item {
                                         OptionRow(
-                                            "Audio",
-                                            audioOpts.firstOrNull { it.selected }?.label
+                                            "Audio track",
+                                            if (hasDubChoice) (if (dubOn) "English" else "Native")
+                                            else audioOpts.firstOrNull { it.selected }?.label
                                                 ?: if (audioOpts.isEmpty()) "Single track" else "Default",
                                         ) { page = "audio" }
                                     }
@@ -1002,24 +1051,40 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                                 ?: if (textOpts.isEmpty()) "None in stream" else "Off",
                                         ) { page = "subs" }
                                     }
-                                    if (qualities.size > 1) {
+                                    if (streams.isNotEmpty()) {
                                         item {
-                                            OptionRow(
-                                                "Quality",
-                                                if (qualityH < 0) "Auto" else "${qualityH}p",
-                                            ) { page = "quality" }
+                                            OptionRow("Server", "Server ${sourceIdx + 1} of ${streams.size}") { page = "source" }
                                         }
                                     }
                                     item {
-                                        OptionRow("Playback speed", if (speed == 1f) "Normal" else "${speed}x") {
-                                            page = "speed"
+                                        val has = Store.hasDownload(ep.id)
+                                        OptionRow("Download", if (has) "Downloaded" else "Available") {
+                                            if (!has) {
+                                                page = ""
+                                                dlSheet = true
+                                            }
                                         }
                                     }
-                                    if (streams.size > 1) {
-                                        item {
-                                            OptionRow("Source", "Source ${sourceIdx + 1} of ${streams.size}") {
-                                                page = "source"
-                                            }
+                                    item {
+                                        OptionRow("Playback speed", if (speed == 1f) "1.0x" else "${speed}x") { page = "speed" }
+                                    }
+                                    item {
+                                        SheetSwitchRow("Auto Skip", autoSkip) {
+                                            autoSkip = it
+                                            PlayerPrefs.autoSkip = it
+                                        }
+                                    }
+                                    item {
+                                        SheetSwitchRow("Auto Next", autoNext) {
+                                            autoNext = it
+                                            PlayerPrefs.autoNext = it
+                                        }
+                                    }
+                                    item { OptionRow("Subtitle style", "Font, size, position") { page = "substyle" } }
+                                    item {
+                                        OptionRow("Load subtitle file", "srt, vtt, ass") {
+                                            page = ""
+                                            subPicker.launch(arrayOf("*/*"))
                                         }
                                     }
                                     if (episodes.isNotEmpty()) {
@@ -1027,25 +1092,21 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                             OptionRow("Episodes", "${episodes.size} total") { page = "episodes" }
                                         }
                                     }
+                                }
+
+                                "substyle" -> {
                                     item {
-                                        OptionRow("Load subtitle file", "srt, vtt, ass") {
-                                            page = ""
-                                            subPicker.launch(arrayOf("*/*"))
-                                        }
-                                    }
-                                    item {
-                                        OptionRow("Subtitle size", "${(subScale * 100).toInt()}%") {
-                                            val opts = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
-                                            val i = opts.indexOfFirst { it == subScale }
-                                            subScale = opts[(i + 1) % opts.size]
-                                            PlayerPrefs.subScale = subScale
-                                        }
-                                    }
-                                    item {
-                                        OptionRow("Autoplay next episode", if (autoNext) "On" else "Off") {
-                                            autoNext = !autoNext
-                                            PlayerPrefs.autoNext = autoNext
-                                        }
+                                        SubtitleStyleEditor(
+                                            dark = true,
+                                            font = subFont,
+                                            bold = subBold,
+                                            scale = subScale,
+                                            pos = subPos,
+                                            onFont = { subFont = it; PlayerPrefs.subFont = it },
+                                            onBold = { subBold = it; PlayerPrefs.subBold = it },
+                                            onScale = { subScale = it; PlayerPrefs.subScale = it },
+                                            onPos = { subPos = it; PlayerPrefs.subPos = it },
+                                        )
                                     }
                                 }
 
@@ -1073,6 +1134,15 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
 
                                 "quality" -> {
                                     item { OptionRow("Auto", selected = qualityH < 0) { setQuality(-1) } }
+                                    if (qualities.isEmpty()) {
+                                        item {
+                                            Text(
+                                                "This stream has a single quality. Other servers may offer more.",
+                                                color = Color(0xFFAAAAAA),
+                                                modifier = Modifier.padding(16.dp),
+                                            )
+                                        }
+                                    }
                                     items(qualities) { h -> OptionRow("${h}p", selected = qualityH == h) { setQuality(h) } }
                                 }
 

@@ -64,6 +64,10 @@ fun PlayerSettingsScreen(onBack: () -> Unit) {
     var sub by remember { mutableStateOf(PlayerPrefs.subLang) }
     var auto by remember { mutableStateOf(PlayerPrefs.autoNext) }
     var scale by remember { mutableStateOf(PlayerPrefs.subScale) }
+    var autoSkip by remember { mutableStateOf(PlayerPrefs.autoSkip) }
+    var font by remember { mutableStateOf(PlayerPrefs.subFont) }
+    var bold by remember { mutableStateOf(PlayerPrefs.subBold) }
+    var pos by remember { mutableStateOf(PlayerPrefs.subPos) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, contentDescription = "Back") }
@@ -74,15 +78,22 @@ fun PlayerSettingsScreen(onBack: () -> Unit) {
         LangPicker("Default audio language", "Used when a stream has several audio tracks.", audio) { audio = it; PlayerPrefs.audioLang = it }
         LangPicker("Default subtitle language", "Used when a stream has subtitle tracks.", sub,
             listOf("Off" to "off")) { sub = it; PlayerPrefs.subLang = it }
-        Text("Subtitle size", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(top = 10.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-            items(listOf(0.75f, 1f, 1.25f, 1.5f)) { v ->
-                PillChip("${v}x", scale == v) { scale = v; PlayerPrefs.subScale = v }
-            }
-        }
+        Spacer(Modifier.height(12.dp))
+        Text("Subtitle style", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        SubtitleStyleEditor(
+            dark = false,
+            font = font,
+            bold = bold,
+            scale = scale,
+            pos = pos,
+            onFont = { font = it; PlayerPrefs.subFont = it },
+            onBold = { bold = it; PlayerPrefs.subBold = it },
+            onScale = { scale = it; PlayerPrefs.subScale = it },
+            onPos = { pos = it; PlayerPrefs.subPos = it },
+        )
         Spacer(Modifier.height(12.dp))
         Text("Playback", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         SwitchRow("Auto-play next episode", "Shows an Up next countdown at the end.", auto) { auto = it; PlayerPrefs.autoNext = it }
+        SwitchRow("Auto skip intro", "Jumps ahead about 85 seconds at the start of an episode.", autoSkip) { autoSkip = it; PlayerPrefs.autoSkip = it }
     }
 }
