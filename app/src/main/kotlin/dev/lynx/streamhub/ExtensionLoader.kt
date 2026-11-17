@@ -20,7 +20,7 @@ object ExtensionLoader {
             @Suppress("DEPRECATION")
             pm.getInstalledPackages(PackageManager.GET_META_DATA)
         }
-        return packages.mapNotNull { load(context, it) }
+        return packages.mapNotNull { load(context, it) } + CsHost.extensions(context)
     }
 
     private fun load(context: Context, pkg: PackageInfo): Extension? {

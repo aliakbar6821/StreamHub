@@ -16,7 +16,7 @@ jobs:
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.10.2
+          gradle-version: 8.14
       - run: gradle :app:assembleDebug :ext-archive:assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:

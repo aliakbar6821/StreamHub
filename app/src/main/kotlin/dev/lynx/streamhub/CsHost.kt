@@ -1,0 +1,236 @@
+package dev.lynx.streamhub
+
+import android.content.Context
+import android.content.res.AssetManager
+import android.content.res.Resources
+import android.util.Log
+import com.lagradost.cloudstream3.APIHolder
+import com.lagradost.cloudstream3.AnimeLoadResponse
+import com.lagradost.cloudstream3.CloudStreamApp
+import com.lagradost.cloudstream3.DubStatus
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.MovieLoadResponse
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.TvSeriesLoadResponse
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.plugins.BasePlugin
+import com.lagradost.cloudstream3.plugins.Plugin
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import dalvik.system.PathClassLoader
+import dev.lynx.streamhub.api.Extension
+import dev.lynx.streamhub.api.HomeSection
+import dev.lynx.streamhub.api.MediaDetails
+import dev.lynx.streamhub.api.MediaItem
+import dev.lynx.streamhub.api.MediaType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.Collections
+import dev.lynx.streamhub.api.Episode as ShEpisode
+import dev.lynx.streamhub.api.Stream as ShStream
+
+object CsHost {
+    private const val TAG = "CsHost"
+    private val loaded = HashSet<String>()
+    @Volatile private var fired = false
+
+    private fun dir(c: Context) = File(c.filesDir, "cs3").apply { mkdirs() }
+    private fun prefs(c: Context) = c.getSharedPreferences("cs3_installed", Context.MODE_PRIVATE)
+    private fun key(pkg: String) = pkg.removePrefix("cs3:").replace(Regex("[^A-Za-z0-9._-]"), "_")
+
+    fun installedVersion(c: Context, pkg: String): Long? {
+        val k = key(pkg)
+        return if (prefs(c).contains(k) && File(dir(c), "$k.cs3").exists()) prefs(c).getLong(k, 1L) else null
+    }
+
+    suspend fun install(c: Context, e: RepoExt) = withContext(Dispatchers.IO) {
+        val app = c.applicationContext
+        CloudStreamApp.setContext(app)
+        val k = key(e.pkg)
+        val f = File(dir(app), "$k.cs3")
+        if (f.exists()) f.delete()
+        val con = URL(e.apk).openConnection() as HttpURLConnection
+        con.connectTimeout = 15000
+        con.readTimeout = 60000
+        con.instanceFollowRedirects = true
+        con.setRequestProperty("User-Agent", "StreamHub/0.1")
+        try {
+            con.inputStream.use { i -> f.outputStream().use { i.copyTo(it) } }
+        } finally {
+            con.disconnect()
+        }
+        f.setReadOnly()
+        if (!loadPlugin(app, f)) {
+            if (!loaded.contains(f.absolutePath)) throw Exception("Plugin could not be loaded")
+        }
+        prefs(app).edit().putLong(k, e.version).apply()
+    }
+
+    private fun buildResources(c: Context, f: File): Resources {
+        val assets = AssetManager::class.java.getDeclaredConstructor().newInstance()
+        AssetManager::class.java.getMethod("addAssetPath", String::class.java).invoke(assets, f.absolutePath)
+        return Resources(assets, c.resources.displayMetrics, c.resources.configuration)
+    }
+
+    @Synchronized
+    private fun loadPlugin(c: Context, f: File): Boolean {
+        if (loaded.contains(f.absolutePath)) return true
+        return try {
+            if (f.canWrite()) f.setReadOnly()
+            val loader = PathClassLoader(f.absolutePath, c.classLoader)
+            val text = loader.getResourceAsStream("manifest.json")?.bufferedReader()?.use { it.readText() }
+                ?: return false
+            val manifest = JSONObject(text)
+            val cls = manifest.optString("pluginClassName")
+            if (cls.isEmpty()) return false
+            val inst = loader.loadClass(cls).getDeclaredConstructor().newInstance() as BasePlugin
+            val id = f.nameWithoutExtension
+            inst.filename = id
+            if (inst is Plugin && manifest.optBoolean("requiresResources")) {
+                inst.resources = buildResources(c, f)
+            }
+            val err = runCatching { if (inst is Plugin) inst.load(c) else inst.load() }.exceptionOrNull()
+            val registered = APIHolder.allProviders.any { it.sourcePlugin == id }
+            if (err != null && !registered) throw err
+            loaded.add(f.absolutePath)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "load failed ${f.name}: ${t.message}", t)
+            false
+        }
+    }
+
+    @Synchronized
+    fun extensions(c: Context): List<Extension> {
+        val app = c.applicationContext
+        CloudStreamApp.setContext(app)
+        dir(app).listFiles()?.filter { it.extension == "cs3" }?.forEach { loadPlugin(app, it) }
+        if (!fired) {
+            fired = true
+            runCatching {
+                com.lagradost.cloudstream3.MainActivity.mainPluginsLoadedEvent(true)
+                com.lagradost.cloudstream3.MainActivity.afterPluginsLoadedEvent(true)
+                com.lagradost.cloudstream3.MainActivity.afterRepositoryLoadedEvent(true)
+            }
+        }
+        return APIHolder.allProviders
+            .filter { it.sourcePlugin != null && !it.supportedTypes.contains(TvType.NSFW) }
+            .map { CsExtension(it) }
+    }
+}
+
+private fun TvType?.toMediaType(): MediaType = when (this) {
+    TvType.Movie, TvType.AnimeMovie, TvType.Documentary -> MediaType.MOVIE
+    TvType.Anime, TvType.OVA -> MediaType.ANIME
+    else -> MediaType.SERIES
+}
+
+class CsExtension(private val api: MainAPI) : Extension {
+    override val id = "cs3:" + api.name
+    override val name = api.name
+    override val version = 1
+
+    private fun SearchResponse.toItem(): MediaItem {
+        val t: TvType? = this.type
+        return MediaItem(
+            id = "cs3|" + api.name + "|" + this.url,
+            title = this.name,
+            poster = this.posterUrl,
+            type = t.toMediaType(),
+        )
+    }
+
+    override suspend fun getHome(): List<HomeSection> = coroutineScope {
+        api.mainPage.take(6).map { mp ->
+            async(Dispatchers.IO) {
+                withTimeoutOrNull(12_000L) {
+                    runCatching { api.getMainPage(1, MainPageRequest(mp.name, mp.data, false)) }.getOrNull()
+                }
+            }
+        }.awaitAll()
+            .flatMap { it?.items ?: emptyList() }
+            .filter { it.list.isNotEmpty() }
+            .map { HomeSection(it.name + " · " + api.name, it.list.map { r -> r.toItem() }) }
+    }
+
+    override suspend fun search(query: String, page: Int): List<MediaItem> = withContext(Dispatchers.IO) {
+        val res = withTimeoutOrNull(12_000L) {
+            runCatching { api.search(query) }.getOrNull()
+                ?: runCatching { api.search(query, page)?.items }.getOrNull()
+                ?: runCatching { api.quickSearch(query) }.getOrNull()
+        }
+        (res ?: emptyList()).map { it.toItem() }
+    }
+
+    override suspend fun getDetails(id: String): MediaDetails = withContext(Dispatchers.IO) {
+        val url = id.split("|", limit = 3).getOrNull(2) ?: id
+        val lr = withTimeoutOrNull(40_000L) { api.load(url) } ?: throw Exception("Could not load details")
+        val eps: List<com.lagradost.cloudstream3.Episode> = when (lr) {
+            is TvSeriesLoadResponse -> lr.episodes
+            is AnimeLoadResponse -> lr.episodes[DubStatus.Subbed]
+                ?: lr.episodes[DubStatus.Dubbed]
+                ?: lr.episodes.values.flatten()
+            else -> emptyList()
+        }
+        val episodes = when {
+            eps.isNotEmpty() -> eps.mapIndexed { i, e ->
+                val label = e.name?.takeIf { it.isNotBlank() }
+                    ?: ("Episode " + (e.episode ?: (i + 1)))
+                val s = e.season
+                ShEpisode(
+                    id = e.data,
+                    number = (i + 1).toFloat(),
+                    title = if (s != null && s > 1) "S$s · $label" else label,
+                    thumbnail = e.posterUrl,
+                )
+            }
+            lr is MovieLoadResponse -> listOf(ShEpisode(lr.dataUrl, 1f, lr.name, lr.posterUrl))
+            lr is LiveStreamLoadResponse -> listOf(ShEpisode(lr.dataUrl, 1f, lr.name, lr.posterUrl))
+            else -> emptyList()
+        }
+        val t: TvType = lr.type
+        MediaDetails(
+            item = MediaItem(
+                id = id,
+                title = lr.name,
+                poster = lr.posterUrl,
+                type = t.toMediaType(),
+                genres = lr.tags ?: emptyList(),
+                year = lr.year,
+                description = lr.plot,
+            ),
+            episodes = episodes,
+        )
+    }
+
+    override suspend fun getStreams(episodeId: String): List<ShStream> = withContext(Dispatchers.IO) {
+        val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+        withTimeoutOrNull(25_000L) {
+            runCatching { api.loadLinks(episodeId, false, { }, { l -> links.add(l) }) }
+        }
+        links.toList()
+            .filter { it.url.isNotBlank() }
+            .sortedByDescending { it.quality }
+            .map { l ->
+                val ref: String? = l.referer
+                val hs: Map<String, String>? = l.headers
+                val h = HashMap<String, String>(hs.orEmpty())
+                if (!ref.isNullOrBlank() && h.keys.none { it.equals("Referer", true) }) h["Referer"] = ref
+                val q = if (l.quality > 0) l.quality.toString() + "p" else null
+                ShStream(
+                    url = l.url,
+                    quality = listOfNotNull(l.name, q).joinToString(" "),
+                    headers = h,
+                )
+            }
+    }
+}

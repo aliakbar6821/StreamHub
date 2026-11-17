@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "dev.lynx.streamhub"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         applicationId = "dev.lynx.streamhub"
         minSdk = 24
@@ -57,4 +57,36 @@ if (ks.exists()) {
             }
         }
     }
+}
+
+android {
+    packaging {
+        resources {
+            excludes += listOf(
+                "META-INF/*.kotlin_module",
+                "META-INF/INDEX.LIST",
+                "META-INF/io.netty.versions.properties",
+                "META-INF/*.version",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/DEPENDENCIES",
+                "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
+            )
+        }
+    }
+}
+
+configurations.configureEach {
+    resolutionStrategy {
+        force("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+        force("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
+        force("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    }
+}
+
+dependencies {
+    implementation("com.github.recloudstream.cloudstream:library:v4.8.0")
+    compileOnly("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.1")
+    compileOnly("com.squareup.okhttp3:okhttp:5.3.2")
+    compileOnly("com.github.Blatzar:NiceHttp:0.4.17")
 }

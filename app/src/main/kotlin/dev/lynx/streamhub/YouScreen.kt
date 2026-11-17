@@ -150,10 +150,8 @@ fun ExtensionsScreen() {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             available[r]?.forEach { e ->
-                val installed = remember(refresh, busy) { Repos.installedVersion(context, e.pkg) }
+                val installed = remember(refresh, busy) { if (e.pkg.startsWith("cs3:")) CsHost.installedVersion(context, e.pkg) else Repos.installedVersion(context, e.pkg) }
                 val label = when {
-                    e.pkg.startsWith("cs3:") -> "Unsupported"
-                    e.pkg.startsWith("cs3:") -> "Unsupported"
                     installed == null -> "Install"
                     installed < e.version -> "Update"
                     else -> "Installed"
@@ -164,7 +162,7 @@ fun ExtensionsScreen() {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(e.name, style = MaterialTheme.typography.titleSmall)
-                        Text(if (e.pkg.startsWith("cs3:")) "CloudStream plugin (.cs3), not compatible" else "v${e.version}", style = MaterialTheme.typography.bodySmall)
+                        Text(if (e.pkg.startsWith("cs3:")) "CloudStream plugin \u00b7 v${e.version}" else "v${e.version}", style = MaterialTheme.typography.bodySmall)
                     }
                     Button(
                         enabled = busy == null && label != "Installed" && label != "Unsupported",
@@ -173,9 +171,15 @@ fun ExtensionsScreen() {
                                 busy = e.pkg
                                 status = null
                                 try {
-                                    val f = Repos.download(context, e)
-                                    Repos.launchInstall(context, f)
-                                    status = "Confirm the install prompt, then tap Refresh and Reload extensions."
+                                    if (e.pkg.startsWith("cs3:")) {
+                                        CsHost.install(context, e)
+                                        Session.reload(context)
+                                        status = "Installed " + e.name + ". It now appears in Home and Search."
+                                    } else {
+                                        val f = Repos.download(context, e)
+                                        Repos.launchInstall(context, f)
+                                        status = "Confirm the install prompt, then tap Refresh and Reload extensions."
+                                    }
                                 } catch (t: Throwable) {
                                     status = "Install failed: ${t.message}"
                                 }
