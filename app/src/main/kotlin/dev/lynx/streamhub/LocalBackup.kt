@@ -15,6 +15,7 @@ object LocalBackup {
             val entries = JSONObject()
             for ((key, value) in context.getSharedPreferences(name, Context.MODE_PRIVATE).all) {
                 if (listOnly && key != "mylist") continue
+                if (name == "streamhub" && key == "downloads") continue // private paths are not portable
                 val type = when (value) {
                     is String -> "string"
                     is Boolean -> "boolean"
@@ -46,6 +47,7 @@ object LocalBackup {
             val entries = stores.getJSONObject(name)
             val result = mutableMapOf<String, Any>()
             for (key in entries.keys()) {
+                if (name == "streamhub" && key == "downloads") continue // ignore legacy path-only records
                 require(!listOnly || key == "mylist") { "Unexpected list entry" }
                 val e = entries.getJSONObject(key)
                 val value: Any = when (e.getString("type")) {
@@ -69,8 +71,13 @@ object LocalBackup {
             parsed[name] = result
         }
         for ((name, entries) in parsed) {
-            val edit = context.getSharedPreferences(name, Context.MODE_PRIVATE).edit()
-            if (!listOnly) edit.clear()
+            val pref = context.getSharedPreferences(name, Context.MODE_PRIVATE)
+            val ownDownloads = if (name == "streamhub") pref.getString("downloads", null) else null
+            val edit = pref.edit()
+            if (!listOnly) {
+                edit.clear()
+                if (ownDownloads != null) edit.putString("downloads", ownDownloads)
+            }
             for ((key, value) in entries) {
                 when (value) {
                     is String -> edit.putString(key, value)

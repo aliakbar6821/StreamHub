@@ -41,9 +41,9 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
         if (!Session.loaded) Session.reload(context)
     }
 
-    val base = Session.sections
+    val base = remember(Session.sections) { Session.sections
         .map { s -> HomeSection(s.title, s.items.filter { Safety.allowed(it) }) }
-        .filter { it.items.isNotEmpty() }
+        .filter { it.items.isNotEmpty() } }
     val chips = listOf("All", "Movies", "Series", "Anime") +
         base.flatMap { it.items }.flatMap { it.genres }.distinct().take(12) +
         base.map { it.title }.distinct()
@@ -68,7 +68,7 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
     LazyColumn(Modifier.fillMaxWidth()) {
         item {
             Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp),
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 0.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
@@ -130,7 +130,7 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(Store.history.toList()) { h -> HistoryCard(h, onOpen) }
+                    items(Store.history.toList(), key = { it.item.id + ":" + it.episodeId }) { h -> HistoryCard(h, onOpen) }
                 }
             }
             item { Spacer(Modifier.height(20.dp)) }
@@ -154,7 +154,7 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        items(section.items) { PosterCard(it, onOpen) }
+                        items(section.items, key = { it.id }) { PosterCard(it, onOpen) }
                     }
                 }
                 item { Spacer(Modifier.height(20.dp)) }

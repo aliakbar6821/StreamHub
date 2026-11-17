@@ -11,12 +11,28 @@ android {
         applicationId = "dev.lynx.streamhub"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1) + 100
+        versionName = "0.2.0"
+        manifestPlaceholders["appLabel"] = "StreamHub"
+    }
+    signingConfigs {
+        create("privateRelease") {
+            val path = System.getenv("STREAMHUB_KEYSTORE_PATH")
+            if (!path.isNullOrBlank()) storeFile = file(path)
+            storePassword = System.getenv("STREAMHUB_STORE_PASSWORD")
+            keyAlias = System.getenv("STREAMHUB_KEY_ALIAS")
+            keyPassword = System.getenv("STREAMHUB_KEY_PASSWORD")
+        }
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            applicationIdSuffix = ".stable"
+            manifestPlaceholders["appLabel"] = "StreamHub Stable"
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("privateRelease")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     compileOptions {

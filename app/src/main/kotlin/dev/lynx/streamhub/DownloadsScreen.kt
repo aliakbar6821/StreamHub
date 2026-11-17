@@ -2,6 +2,7 @@ package dev.lynx.streamhub
 import android.app.DownloadManager
 import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -14,6 +15,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,6 +33,8 @@ import coil.compose.AsyncImage
 import dev.lynx.streamhub.api.Episode
 import dev.lynx.streamhub.api.MediaType
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 object DlInfo {
@@ -37,7 +42,7 @@ object DlInfo {
         c.getSharedPreferences("dl_meta", Context.MODE_PRIVATE).getString(id.toString(), "") ?: ""
 
     fun bytes(c: Context, id: Long): Long {
-        if (id >= 1_000_000_000_000L) return Downloader.bytes(id)
+        if (id >= 1_000_000_000_000L) return Downloader.savedBytes(c, id)
         val dm = c.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         dm.query(DownloadManager.Query().setFilterById(id)).use {
             if (!it.moveToFirst()) return 0L
@@ -46,24 +51,34 @@ object DlInfo {
     }
 }
 
-private data class DlState(val pct: Int, val done: Boolean, val failed: Boolean, val bytes: Long)
+private data class DlState(val pct: Int = 0, val done: Boolean = false, val failed: Boolean = false,
+    val bytes: Long = 0, val total: Long = -1, val paused: Boolean = false, val queued: Boolean = false)
 
 private fun stateOf(c: Context, d: DownloadEntry): DlState {
     val st = Downloader.status(c, d.downloadId)
     val f = File(d.path)
     val done = st.first == 8 || (st.first == -1 && f.exists() && f.length() > 0)
-    return DlState(if (done) 100 else st.second, done, st.first == 16, if (done) f.length() else DlInfo.bytes(c, d.downloadId))
+    val total = if (done) f.length() else if (d.downloadId >= 1_000_000_000_000L) Downloader.total(c, d.downloadId) else -1L
+    return DlState(if (done) 100 else st.second, done, st.first == 16,
+        if (done) f.length() else DlInfo.bytes(c, d.downloadId), total, st.first == 4, st.first == 1)
 }
 
-private fun mb(b: Long) = "${b / 1048576} MB"
+private fun mb(b: Long): String = when {
+    b < 0 -> "Size unknown"
+    b >= 1_073_741_824L -> String.format(java.util.Locale.US, "%.2f GB", b / 1_073_741_824.0)
+    else -> String.format(java.util.Locale.US, "%.1f MB", b / 1_048_576.0)
+}
 
 private fun countLabel(item: dev.lynx.streamhub.api.MediaItem, n: Int) =
     if (item.type == MediaType.MOVIE) "Movie" else "$n episode${if (n == 1) "" else "s"}"
 
 @Composable
-private fun GroupRow(list: List<DownloadEntry>, edit: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
+private fun GroupRow(list: List<DownloadEntry>, summary: String, edit: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
     val item = list.first().item
-    Row(Modifier.fillMaxWidth().clickable(onClick = onOpen), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+        .background(MaterialTheme.colorScheme.surfaceContainer)
+        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp))
+        .clickable(onClick = onOpen).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
         AsyncImage(
             model = item.poster, contentDescription = null, contentScale = ContentScale.Crop,
             modifier = Modifier.width(128.dp).aspectRatio(3f / 2f).clip(RoundedCornerShape(14.dp))
@@ -73,63 +88,93 @@ private fun GroupRow(list: List<DownloadEntry>, edit: Boolean, onOpen: () -> Uni
         Column(Modifier.weight(1f)) {
             Text(item.title, fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(6.dp))
-            Text(countLabel(item, list.size), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(summary, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (edit) IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, contentDescription = "Delete") }
     }
 }
 
 @Composable
-private fun DlRow(d: DownloadEntry, s: DlState, label: String, onPlay: () -> Unit, onRemove: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable(enabled = s.done, onClick = onPlay).padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.width(112.dp).aspectRatio(5f / 3f).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
-            AsyncImage(model = d.item.poster, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            Text(
-                if (d.item.type == MediaType.MOVIE) "MOVIE" else "EP ${d.episodeNumber.toInt()}",
-                color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).clip(RoundedCornerShape(50))
-                    .background(Color(0xAA000000)).padding(horizontal = 8.dp, vertical = 3.dp),
-            )
+private fun DlRow(d: DownloadEntry, s: DlState, label: String, onPlay: () -> Unit,
+    onRemove: () -> Unit, onPause: () -> Unit, onResume: () -> Unit) {
+    val context = LocalContext.current
+    val colors = MaterialTheme.colorScheme
+    val source = remember(d.downloadId) {
+        context.getSharedPreferences("dl_source", Context.MODE_PRIVATE)
+            .getString(d.downloadId.toString(), null) ?: "Source not recorded"
+    }
+    val resumable = remember(d.downloadId) { Downloader.canResume(context, d.downloadId) }
+    val status = when {
+        s.done -> "Downloaded"
+        s.failed -> "Failed"
+        s.paused -> "Paused"
+        s.queued -> "Waiting / retrying"
+        else -> "Downloading"
+    }
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth()
+        .clip(RoundedCornerShape(18.dp)).background(colors.surfaceContainer)
+        .border(1.dp, colors.outlineVariant, RoundedCornerShape(18.dp))
+        .clickable(enabled = s.done, onClick = onPlay).padding(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AsyncImage(model = d.item.poster, contentDescription = null, contentScale = ContentScale.Crop,
+                modifier = Modifier.width(84.dp).height(86.dp).clip(RoundedCornerShape(12.dp))
+                    .background(colors.surfaceVariant))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(d.item.title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(listOf(epLabel(d.item, d.episodeNumber), d.episodeTitle).filter { it.isNotBlank() }.joinToString(" · "),
+                    fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = colors.onSurfaceVariant)
+            }
+            IconButton(onClick = onRemove) { Icon(Icons.Filled.Close, "Remove download") }
         }
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                d.episodeTitle.ifBlank { epLabel(d.item, d.episodeNumber) },
-                fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                listOf(epLabel(d.item, d.episodeNumber), label).filter { it.isNotBlank() }.joinToString(" \u2022 "),
-                fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                when {
-                    s.failed -> "Failed"
-                    s.done -> mb(s.bytes)
-                    else -> "${s.pct}% \u2022 ${mb(s.bytes)}"
-                },
-                fontSize = 12.sp,
-                color = if (s.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (!s.done && !s.failed) {
-                LinearProgressIndicator(progress = { s.pct / 100f }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+        Spacer(Modifier.height(10.dp))
+        Text("Source: $source", fontSize = 12.sp, color = colors.onSurfaceVariant)
+        Text(label.ifBlank { "Audio / quality not recorded" }, fontSize = 12.sp, color = colors.onSurfaceVariant)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(status, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    color = if (s.failed) colors.error else colors.onSurface)
+                Text(if (s.done) mb(s.bytes) else mb(s.bytes) + " / " + mb(s.total) +
+                    (if (s.total > 0 || s.pct > 0) " · ${s.pct}%" else ""),
+                    fontSize = 12.sp, color = colors.onSurfaceVariant)
+            }
+            if (s.done) IconButton(onClick = onPlay) { Icon(Icons.Filled.PlayArrow, "Play download") }
+            else if (resumable) {
+                if (s.paused || s.failed) IconButton(onClick = onResume) {
+                    Icon(if (s.failed) Icons.Filled.Refresh else Icons.Filled.PlayArrow,
+                        if (s.failed) "Retry download" else "Resume download")
+                } else IconButton(onClick = onPause) { Icon(Icons.Filled.Pause, "Pause download") }
             }
         }
-        IconButton(onClick = onRemove) { Icon(Icons.Filled.Close, contentDescription = "Remove") }
+        if (!s.done) {
+            if (s.total > 0 || s.pct > 0 || s.paused || s.failed)
+                LinearProgressIndicator(progress = { (s.pct / 100f).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+            else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+        if (s.failed) Text(Downloader.failure(context, d.downloadId), fontSize = 12.sp,
+            color = colors.error, modifier = Modifier.padding(top = 8.dp))
+        if (!s.done && !resumable) Text("Older transfer: remove it and download again to enable pause/resume.",
+            fontSize = 12.sp, color = colors.onSurfaceVariant)
     }
 }
 
 @Composable
 fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
     val context = LocalContext.current
-    var tick by remember { mutableIntStateOf(0) }
+    var states by remember { mutableStateOf<Map<DownloadEntry, DlState>>(emptyMap()) }
+    val entries = Store.downloads.toList()
     var openId by remember { mutableStateOf<String?>(null) }
     var edit by remember { mutableStateOf(false) }
     var newest by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { while (true) { delay(1000); tick++ } }
+    LaunchedEffect(entries) {
+        while (true) {
+            states = withContext(Dispatchers.IO) { entries.associateWith { stateOf(context, it) } }
+            delay(1000L)
+        }
+    }
 
     val groups = Store.downloads.groupBy { it.item.id }
     val cur = openId?.let { groups[it] }
@@ -148,18 +193,23 @@ fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
                 }
             } else {
                 LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    items(groups.values.toList()) { list ->
-                        GroupRow(list, edit, onOpen = { openId = list.first().item.id }, onDelete = { list.forEach { Downloader.remove(context, it) } })
+                    items(groups.values.toList(), key = { it.first().item.id }) { list ->
+                        val done = list.count { states[it]?.done == true }
+                        val paused = list.count { states[it]?.paused == true }
+                        val downloadedBytes = list.sumOf { states[it]?.bytes ?: 0L }
+                        val summary = "${countLabel(list.first().item, list.size)} · $done saved · ${mb(downloadedBytes)}" +
+                            if (paused > 0) " · $paused paused" else ""
+                        GroupRow(list, summary, edit, onOpen = { openId = list.first().item.id }, onDelete = { list.forEach { Downloader.remove(context, it) } })
                     }
                 }
             }
         }
     } else {
         val item = cur.first().item
-        val states = remember(tick, cur.size) { cur.associateWith { stateOf(context, it) } }
-        val allDone = states.values.all { it.done }
-        val total = states.values.sumOf { it.bytes }
-        val sub = (if (allDone) "Downloaded" else "Downloading") + " \u2022 " + countLabel(item, cur.size) + " \u2022 " + mb(total)
+        val groupStates = cur.mapNotNull { states[it] }
+        val allDone = groupStates.size == cur.size && groupStates.all { it.done }
+        val total = groupStates.sumOf { it.bytes }
+        val sub = (if (allDone) "Downloaded" else if (groupStates.any { it.paused }) "Paused / in progress" else "In progress") + " \u2022 " + countLabel(item, cur.size) + " \u2022 " + mb(total)
         val sorted = cur.sortedBy { it.episodeNumber }.let { if (newest) it.reversed() else it }
         fun playFirst() {
             val d = cur.sortedBy { it.episodeNumber }.firstOrNull { states[it]?.done == true } ?: return
@@ -185,7 +235,7 @@ fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(
                         onClick = { playFirst() },
-                        enabled = states.values.any { it.done },
+                        enabled = groupStates.any { it.done },
                         modifier = Modifier.weight(1f).height(48.dp),
                     ) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = null)
@@ -203,12 +253,14 @@ fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
                     PillChip("Newest", newest) { newest = true }
                 }
             }
-            items(sorted) { d ->
-                val s = states[d] ?: stateOf(context, d)
+            items(sorted, key = { it.downloadId }) { d ->
+                val s = states[d] ?: DlState()
                 DlRow(
                     d, s, DlInfo.label(context, d.downloadId),
                     onPlay = { onPlay(PlayRequest(null, d.item, Episode(d.episodeId, d.episodeNumber, d.episodeTitle), 0L, d.path)) },
                     onRemove = { Downloader.remove(context, d) },
+                    onPause = { Downloader.pause(context, d.downloadId) },
+                    onResume = { Downloader.resume(context, d) },
                 )
             }
         }

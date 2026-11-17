@@ -42,10 +42,6 @@ object AppPrefs {
     fun setAudio(title: String, value: String) { prefs?.edit()?.putString(key(title, "audio"), value)?.apply() }
     fun setSubtitle(title: String, value: String) { prefs?.edit()?.putString(key(title, "subtitle"), value)?.apply() }
     fun setServer(title: String, value: String) { prefs?.edit()?.putString(key(title, "server"), value)?.apply() }
-    fun reaction(title: String): Int = prefs?.getInt(key(title, "reaction"), 0) ?: 0
-    fun setReaction(title: String, value: Int) {
-        prefs?.edit()?.putInt(key(title, "reaction"), value)?.apply()
-    }
     fun recordServers(names: List<String>) {
         val merged = (names.filter { it.isNotBlank() } + knownServers).distinct().take(40)
         if (merged != knownServers) { knownServers = merged; save() }

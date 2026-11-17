@@ -22,6 +22,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 
 fun epLabel(item: MediaItem, n: Float): String =
@@ -86,13 +87,18 @@ fun DownloadSheet(
             } else if (ext is CsExtension) {
                 val channel = Channel<Stream>(Channel.UNLIMITED)
                 launch {
-                    try { ext.streamsLive(ep.id) { channel.trySend(it) } }
+                    try {
+                        val completed = withTimeoutOrNull(30_000L) {
+                            ext.streamsLive(ep.id) { channel.trySend(it) }; true
+                        } ?: false
+                        if (!completed) warnings = warnings + "Source lookup reached 30 seconds. The returned options may be incomplete; use Refresh source options to try again."
+                    }
                     finally { channel.close() }
                 }
                 for (stream in channel) accept(stream)
                 if (seen.isEmpty()) ext.lastError?.let { warnings = warnings + it }
             } else {
-                val found = withContext(Dispatchers.IO) { ext?.getStreams(ep.id).orEmpty() }
+                val found = withContext(Dispatchers.IO) { withTimeoutOrNull(30_000L) { ext?.getStreams(ep.id).orEmpty() }.orEmpty() }
                 found.forEach { accept(it) }
             }
         } catch (cancel: CancellationException) { throw cancel } catch (t: Exception) { warnings = warnings + (t.message ?: "Source lookup failed") } finally { searching = false }
@@ -101,7 +107,7 @@ fun DownloadSheet(
     val currentHeights = options.map { streamChoice(it).height }.distinct()
         .sortedWith(compareByDescending<Int?> { it ?: -1 })
     LaunchedEffect(busy, options) {
-        if (!busy && options.isNotEmpty()) {
+        if (options.isNotEmpty()) {
             availableHeights = (availableHeights + currentHeights).distinct()
                 .sortedWith(compareByDescending<Int?> { it ?: -1 })
             if (!qualityChosen) {
@@ -113,14 +119,14 @@ fun DownloadSheet(
     val exactOptions = if (qualityChosen) downloadChoicesAtHeight(options, selectedHeight) else emptyList()
     val languages = exactOptions.map { streamChoice(it) }.distinctBy { it.audioKey }
     LaunchedEffect(busy, qualityChosen, options) {
-        if (!busy && qualityChosen && !initialized && languages.isNotEmpty()) {
+        if (qualityChosen && !initialized && languages.isNotEmpty()) {
             val wanted = audioLanguageCode(AppPrefs.audio(media.id))
             language = languages.firstOrNull { it.audioKey == wanted }?.audioKey
                 ?: languages.first().audioKey
             initialized = true
         }
     }
-    val picked = if (busy || !initialized) null else
+    val picked = if (!initialized) null else
         exactOptions.firstOrNull { streamChoice(it).audioKey == language }
 
 
@@ -152,7 +158,7 @@ fun DownloadSheet(
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     availableHeights.forEach { height ->
                         PillChip(height?.let { "${it}p" } ?: "Original file", qualityChosen && selectedHeight == height) {
-                            if (!busy && (!qualityChosen || selectedHeight != height)) {
+                            if (!qualityChosen || selectedHeight != height) {
                                 selectedHeight = height
                                 qualityChosen = true
                                 // Clear stale choices immediately; the provider is queried again.
@@ -166,7 +172,7 @@ fun DownloadSheet(
                 Text("Audio at " + (selectedHeight?.let { "${it}p" } ?: "original quality"),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
-                if (!busy) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     languages.forEach { choice ->
                         PillChip(choice.audioLabel, initialized && language == choice.audioKey) {
                             language = choice.audioKey
@@ -211,7 +217,7 @@ fun DownloadSheet(
                     picked?.let { stream ->
                         val choice = streamChoice(stream)
                         val label = listOfNotNull(choice.audioLabel, choice.height?.let { "${it}p" }).joinToString(" · ")
-                        val ok = Downloader.enqueue(context, media, ep, stream, label, sd)
+                        val ok = Downloader.enqueue(context, media, ep, stream, label, sd, ext?.name)
                         Toast.makeText(context, if (ok) "Download started" else "Already downloaded", Toast.LENGTH_SHORT).show()
                         onDismiss()
                     }

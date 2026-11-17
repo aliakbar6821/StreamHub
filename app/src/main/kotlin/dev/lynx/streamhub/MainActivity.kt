@@ -130,7 +130,7 @@ fun App() {
                 }
             },
         ) { padding ->
-            Box(Modifier.padding(padding).fillMaxSize().statusBarsPadding()) {
+            Box(Modifier.padding(padding).fillMaxSize()) {
                 when (selected) {
                     0 -> HomeScreen(
                         onOpen = { openItem = it },

@@ -309,7 +309,6 @@ fun PlayerScreen(
     var relatedLoaded by remember(req.item.id) { mutableStateOf(false) }
     var relatedError by remember(req.item.id) { mutableStateOf<String?>(null) }
     var relatedRefresh by remember(req.item.id) { mutableIntStateOf(0) }
-    var reaction by remember(req.item.id) { mutableIntStateOf(AppPrefs.reaction(req.item.id)) }
     // The requested episode already identifies its source version.
     var dubOn by remember {
         mutableStateOf((req.ext as? CsExtension)?.dubEpisodes(req.item.id)
@@ -344,6 +343,8 @@ fun PlayerScreen(
     var subBold by remember { mutableStateOf(PlayerPrefs.subBold) }
     var subPos by remember { mutableFloatStateOf(PlayerPrefs.subPos) }
     var skippedFor by remember { mutableStateOf("") }
+    var showSkip by remember(ep.id) { mutableStateOf(false) }
+    var skipShown by remember(ep.id) { mutableStateOf(false) }
     var dlSheet by remember { mutableStateOf(false) }
     var episodeDownload by remember { mutableStateOf<Episode?>(null) }
     var newestEpisodes by remember(req.item.id) { mutableStateOf(false) }
@@ -356,12 +357,16 @@ fun PlayerScreen(
     val http = remember {
         DefaultHttpDataSource.Factory()
             .setUserAgent(Downloader.UA)
-            .setConnectTimeoutMs(20000)
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(20_000)
             .setAllowCrossProtocolRedirects(true)
     }
     val exo = remember {
         ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http)))
+            .setLoadControl(androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                .setBufferDurationsMs(15_000, 50_000, 1_500, 3_000).build())
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http))
+                .setLoadErrorHandlingPolicy(androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(3)))
             .build()
             .also { p ->
                 var tp = p.trackSelectionParameters.buildUpon()
@@ -897,6 +902,18 @@ fun PlayerScreen(
         }
     }
 
+    LaunchedEffect(ep.id, posMs, controls, locked, page) {
+        if (!skipShown && controls && !locked && page.isEmpty() &&
+            req.item.type != dev.lynx.streamhub.api.MediaType.MOVIE &&
+            durMs > 600_000L && posMs in 3000L..240000L) {
+            skipShown = true
+            showSkip = true
+        }
+    }
+    LaunchedEffect(showSkip) {
+        if (showSkip) { delay(3000L); showSkip = false }
+    }
+
     LaunchedEffect(hudStamp) {
         if (hud != null) {
             delay(900)
@@ -1167,12 +1184,6 @@ fun PlayerScreen(
                             activeTrackColor = Color(0xFFFF1744), inactiveTrackColor = Color(0x66FFFFFF)),
                         modifier = Modifier.fillMaxWidth().height(26.dp))
                     if (full) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = {
-                            reaction = if (reaction == 1) 0 else 1; AppPrefs.setReaction(req.item.id, reaction)
-                        }) { Icon(Icons.Outlined.ThumbUp, "Like locally", tint = if (reaction == 1) Color(0xFFFF1744) else Color.White) }
-                        IconButton(onClick = {
-                            reaction = if (reaction == -1) 0 else -1; AppPrefs.setReaction(req.item.id, reaction)
-                        }) { Icon(Icons.Outlined.ThumbDown, "Dislike locally", tint = if (reaction == -1) Color(0xFFFF1744) else Color.White) }
                         IconButton(onClick = { page = "speed" }) {
                             Icon(Icons.Outlined.Speed, "Playback speed", tint = Color.White)
                         }
@@ -1189,38 +1200,30 @@ fun PlayerScreen(
             }
         }
 
-        // skip intro button
-        if (controls && !locked && page.isEmpty() &&
-            req.item.type != dev.lynx.streamhub.api.MediaType.MOVIE &&
-            durMs > 600_000L && posMs in 3000L..240000L
-        ) {
-            Text(
-                "Skip \u25B6\u2759",
-                color = Color.White,
-                fontSize = 13.sp,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 64.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0xCC000000))
-                    .clickable {
-                        seekBy(85_000L)
-                        showHud("+85s")
-                        poke++
-                    }
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-            )
+        // Manual +85-second jump, not detected intro metadata. Show once per episode.
+        if (showSkip && controls && !locked && !inPip && page.isEmpty()) {
+            Surface(color = Color(0xCC000000), shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(end = 24.dp, bottom = if (full) 150.dp else 108.dp)) {
+                Row(Modifier.clickable {
+                    seekBy(85_000L); showSkip = false; showHud("+85s"); poke++
+                }.padding(horizontal = 14.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("+85s", color = Color.White, fontSize = 13.sp)
+                    Icon(Icons.Outlined.FastForward, "Skip forward 85 seconds", tint = Color.White)
+                }
+            }
         }
 
         // unlock button
         FadeVis(
-            visible = locked && controls,
-            modifier = Modifier.align(Alignment.CenterStart).padding(24.dp),
+            visible = locked && controls && !inPip,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 88.dp, top = 24.dp, bottom = 24.dp),
         ) {
             RoundBtn(52.dp, {
                 locked = false
                 controls = true
-            }) { Icon(Icons.Filled.Lock, contentDescription = "Unlock", tint = Accent) }
+            }) { Icon(Icons.Filled.Lock, contentDescription = "Unlock", tint = Color.White) }
         }
 
         if (!inPip && (buffering || (streams.isEmpty() && req.localPath == null)) && error == null) {
