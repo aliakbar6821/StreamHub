@@ -1,5 +1,15 @@
 package dev.lynx.streamhub
 
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.TextFields
+
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -110,7 +120,7 @@ import java.io.File
 import java.util.Locale
 
 private val Accent = Color(0xFFB388FF)
-private val PanelBg = Color(0xF2141418)
+private val PanelBg = Color(0xFF211F1D)
 
 private fun Context.findActivity(): Activity? {
     var c: Context? = this
@@ -214,23 +224,58 @@ private fun OptionRow(
     selected: Boolean = false,
     onClick: () -> Unit,
 ) {
+    // SH_PATCH_02_OPTION_ROW
+    val fg = if (selected) Color.Black else Color.White
+    val icon = when (title) {
+        "Quality" -> Icons.Filled.Tune
+        "Audio track" -> Icons.Filled.Mic
+        "Subtitles" -> Icons.Filled.ClosedCaption
+        "Server" -> Icons.Filled.Storage
+        "Download" -> Icons.Filled.Download
+        "Playback speed" -> Icons.Filled.Speed
+        "Audio output" -> Icons.Filled.Headphones
+        "Episodes" -> Icons.Filled.PlaylistPlay
+        "Subtitle style" -> Icons.Filled.TextFields
+        else -> null
+    }
     Row(
         Modifier
             .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 3.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (selected) Color.White else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 17.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Column(Modifier.weight(1f)) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = fg,
+                modifier = Modifier.size(25.dp))
+        }
+        Text(
+            title,
+            color = fg,
+            fontSize = 17.sp,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (value != null) {
             Text(
-                title,
-                color = if (selected) Accent else Color.White,
-                maxLines = 2,
+                value,
+                color = if (selected) Color.DarkGray else Color.LightGray,
+                fontSize = 15.sp,
+                modifier = Modifier.weight(0.85f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (value != null) Text(value, color = Color(0xFFAAAAAA), fontSize = 12.sp)
         }
-        if (selected) Icon(Icons.Filled.Check, contentDescription = null, tint = Accent)
+        if (selected) {
+            Icon(Icons.Filled.Check, contentDescription = "Selected",
+                tint = Color.Black, modifier = Modifier.size(22.dp))
+        }
     }
 }
 
@@ -246,6 +291,10 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
     var sourceIdx by remember { mutableIntStateOf(0) }
     var streams by remember { mutableStateOf<List<Stream>>(emptyList()) }
     var streamsFor by remember { mutableStateOf("") }
+    var remoteSubs by remember {
+        mutableStateOf<List<Pair<String, String>>>(emptyList())
+    }
+    val subtitleScope = rememberCoroutineScope()
     var attempt by remember { mutableIntStateOf(0) }
     var hlsIdx by remember { mutableIntStateOf(-1) }
     var reloadKey by remember { mutableIntStateOf(0) }
@@ -387,7 +436,11 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
 
     fun pickAudio(o: TrackOpt) {
         tweak {
-            var b = it.setOverrideForType(TrackSelectionOverride(o.group.mediaTrackGroup, o.index))
+            var b = it.setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                .setOverrideForType(
+                    TrackSelectionOverride(o.group.mediaTrackGroup, o.index)
+                )
             if (!o.lang.isNullOrBlank()) b = b.setPreferredAudioLanguage(o.lang)
             b
         }
@@ -397,12 +450,17 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
 
     fun pickSub(o: TrackOpt?) {
         if (o == null) {
-            tweak { it.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true) }
+            tweak {
+                it.clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            }
             PlayerPrefs.subLang = "off"
             showHud("Subtitles off")
         } else {
             tweak {
                 var b = it.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    .setSelectUndeterminedTextLanguage(true)
                     .setOverrideForType(TrackSelectionOverride(o.group.mediaTrackGroup, o.index))
                 if (!o.lang.isNullOrBlank()) b = b.setPreferredTextLanguage(o.lang)
                 b
@@ -456,7 +514,10 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                 .build()
             val pos = exo.currentPosition
             tweak { it.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false) }
-            exo.setMediaItem(cur.buildUpon().setSubtitleConfigurations(listOf(sub)).build(), pos)
+            exo.setMediaItem(cur.buildUpon().setSubtitleConfigurations(
+                (cur.localConfiguration?.subtitleConfigurations.orEmpty() +
+                    listOf(sub)).distinctBy { it.uri.toString() }
+            ).build(), pos)
             exo.prepare()
             exo.playWhenReady = true
             showHud("Subtitle loaded")
@@ -552,6 +613,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
     // 1) collect sources for this episode (first one arrives early, others keep coming)
     LaunchedEffect(ep.id, reloadKey) {
         streams = emptyList()
+        remoteSubs = emptyList()
         streamsFor = ep.id
         hlsIdx = -1
         if (req.localPath != null) return@LaunchedEffect
@@ -572,7 +634,21 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             if (e is CsExtension) {
                 val ch = Channel<Stream>(Channel.UNLIMITED)
                 launch {
-                    try { e.streamsLive(ep.id) { ch.trySend(it) } } finally { ch.close() }
+                    try {
+                        val requestedEpisode = ep.id
+                        e.streamsLive(
+                            requestedEpisode,
+                            onSubtitle = { label, url ->
+                                subtitleScope.launch {
+                                    if (ep.id == requestedEpisode &&
+                                        remoteSubs.none { it.second == url }
+                                    ) {
+                                        remoteSubs = remoteSubs + (label to url)
+                                    }
+                                }
+                            },
+                        ) { ch.trySend(it) }
+                    } finally { ch.close() }
                 }
                 for (s in ch) {
                     if (streams.none { it.url == s.url }) streams = streams + s
@@ -586,6 +662,54 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             if (streams.isEmpty()) error = "Couldn't load sources. Tap Retry."
         } finally {
             ticker.cancel()
+        }
+    }
+
+    // SH_PATCH_02: preserve external subtitles, including late callbacks.
+    fun remoteSubtitleConfigs(): List<M3Item.SubtitleConfiguration> =
+        remoteSubs.distinctBy { it.second }.map { (label, url) ->
+            val path = Uri.parse(url).path.orEmpty().lowercase(Locale.ROOT)
+            val mime = when {
+                path.endsWith(".vtt") -> MimeTypes.TEXT_VTT
+                path.endsWith(".ass") || path.endsWith(".ssa") ->
+                    MimeTypes.TEXT_SSA
+                path.endsWith(".ttml") || path.endsWith(".xml") ->
+                    MimeTypes.APPLICATION_TTML
+                else -> MimeTypes.APPLICATION_SUBRIP
+            }
+            val language = label.trim().takeIf {
+                Regex("[a-zA-Z]{2,3}([-_][a-zA-Z]{2,4})?").matches(it)
+            }?.replace('_', '-')
+            val builder = M3Item.SubtitleConfiguration.Builder(Uri.parse(url))
+                .setId(url)
+                .setMimeType(mime)
+                .setLabel(label.ifBlank { "External subtitles" })
+            if (language != null) builder.setLanguage(language)
+            builder.build()
+        }
+
+    LaunchedEffect(remoteSubs, streamsFor) {
+        if (req.localPath == null && streamsFor == ep.id &&
+            remoteSubs.isNotEmpty()
+        ) {
+            val current = exo.currentMediaItem
+            if (current != null) {
+                val existing = current.localConfiguration
+                    ?.subtitleConfigurations.orEmpty()
+                val merged = (existing + remoteSubtitleConfigs())
+                    .distinctBy { it.uri.toString() }
+                if (merged != existing) {
+                    val position = exo.currentPosition.coerceAtLeast(0L)
+                    val playing = exo.playWhenReady
+                    exo.setMediaItem(
+                        current.buildUpon()
+                            .setSubtitleConfigurations(merged).build(),
+                        position,
+                    )
+                    exo.prepare()
+                    exo.playWhenReady = playing
+                }
+            }
         }
     }
 
@@ -604,6 +728,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                 http.setUserAgent(ua ?: Downloader.UA)
                 http.setDefaultRequestProperties(s.headers.filterKeys { !it.equals("User-Agent", true) })
                 val b = M3Item.Builder().setUri(s.url)
+                    .setSubtitleConfigurations(remoteSubtitleConfigs())
                 if (hlsIdx == sourceIdx || s.url.contains("m3u8", true)) b.setMimeType(MimeTypes.APPLICATION_M3U8)
                 srcInfo = "Source ${sourceIdx + 1} of ${streams.size}" +
                     (s.quality?.takeIf { it.isNotBlank() }?.let { " - $it" } ?: "")
@@ -1005,7 +1130,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             ) {
                 Surface(
                     color = PanelBg,
-                    shape = if (full) RoundedCornerShape(0.dp) else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    shape = if (full) RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp) else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                     modifier = (if (full) Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.6f).widthIn(max = 360.dp)
                         else Modifier.align(Alignment.BottomCenter).navigationBarsPadding().fillMaxWidth().fillMaxHeight(0.6f))
                         .pointerInput(Unit) { detectTapGestures { } },
@@ -1029,6 +1154,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                     "source" -> "Source"
                                     "episodes" -> "Episodes"
                                     "substyle" -> "Subtitle style"
+                                    "output" -> "Audio output"
                                     else -> "Settings"
                                 },
                                 color = Color.White,
@@ -1078,8 +1204,11 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                             }
                                         }
                                     }
+                                    item { OptionRow("Playback speed", if (speed == 1f) "1.0x" else "${speed}x") { page = "speed" } }
                                     item {
-                                        OptionRow("Playback speed", if (speed == 1f) "1.0x" else "${speed}x") { page = "speed" }
+                                        OptionRow("Audio output", "System device") {
+                                            page = "output"
+                                        }
                                     }
                                     item {
                                         SheetSwitchRow("Auto Skip", autoSkip) {
@@ -1125,18 +1254,73 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
 
                                 "audio" -> {
                                     if (hasDubChoice) {
-                                        item { OptionRow("Original source", selected = !dubOn) { setDub(false) } }
-                                        item { OptionRow("Dubbed source", selected = dubOn) { setDub(true) } }
+                                        item {
+                                            Text(
+                                                "SOURCE VERSION",
+                                                color = Color.LightGray,
+                                                fontSize = 12.sp,
+                                                modifier = Modifier.padding(16.dp),
+                                            )
+                                        }
+                                        item {
+                                            OptionRow(
+                                                "Original source",
+                                                selected = !dubOn,
+                                            ) { setDub(false) }
+                                        }
+                                        item {
+                                            OptionRow(
+                                                "Dubbed source",
+                                                selected = dubOn,
+                                            ) { setDub(true) }
+                                        }
                                     }
-                                    if (audioOpts.isEmpty() && !hasDubChoice) {
-                                        item { Text("This stream has a single audio track.", color = Color(0xFFAAAAAA), modifier = Modifier.padding(16.dp)) }
+                                    item {
+                                        Text(
+                                            "AUDIO TRACKS IN CURRENT STREAM",
+                                            color = Color.LightGray,
+                                            fontSize = 12.sp,
+                                            modifier = Modifier.padding(16.dp),
+                                        )
                                     }
-                                    items(audioOpts) { o -> OptionRow(o.label, selected = o.selected) { pickAudio(o) } }
+                                    if (audioOpts.isEmpty()) {
+                                        item {
+                                            Text(
+                                                "No selectable audio tracks reported yet.",
+                                                color = Color.LightGray,
+                                                modifier = Modifier.padding(16.dp),
+                                            )
+                                        }
+                                    }
+                                    items(audioOpts) { o ->
+                                        OptionRow(
+                                            o.label,
+                                            selected = o.selected,
+                                        ) {
+                                            pickAudio(o)
+                                            page = ""
+                                        }
+                                    }
                                 }
 
                                 "subs" -> {
                                     item { OptionRow("Off", selected = !textOn) { pickSub(null) } }
-                                    items(textOpts) { o -> OptionRow(o.label, selected = o.selected) { pickSub(o) } }
+                                    items(textOpts) { o ->
+                                        OptionRow(o.label, selected = o.selected) {
+                                            pickSub(o)
+                                            page = ""
+                                        }
+                                    }
+                                    if (textOpts.isEmpty()) {
+                                        item {
+                                            Text(
+                                                "No supported subtitle tracks reported. " +
+                                                    "Hardcoded subtitles cannot be toggled.",
+                                                color = Color.LightGray,
+                                                modifier = Modifier.padding(16.dp),
+                                            )
+                                        }
+                                    }
                                     item {
                                         OptionRow("Load from file\u2026") {
                                             page = ""
@@ -1159,6 +1343,42 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                     items(qualities) { h -> OptionRow("${h}p", selected = qualityH == h) { setQuality(h) } }
                                 }
 
+                                "output" -> {
+                                    item {
+                                        Text(
+                                            "Playback uses Android's current media output. " +
+                                                "Use system controls to choose connected " +
+                                                "Bluetooth or wired devices.",
+                                            color = Color.LightGray,
+                                            modifier = Modifier.padding(16.dp),
+                                        )
+                                    }
+                                    item {
+                                        OptionRow("Open device settings") {
+                                            val opened = runCatching {
+                                                context.startActivity(
+                                                    android.content.Intent(
+                                                        android.provider.Settings.ACTION_BLUETOOTH_SETTINGS
+                                                    ).addFlags(
+                                                        android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                                    )
+                                                )
+                                            }.isSuccess
+                                            if (!opened) {
+                                                runCatching {
+                                                    context.startActivity(
+                                                        android.content.Intent(
+                                                            android.provider.Settings.ACTION_SETTINGS
+                                                        ).addFlags(
+                                                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                                        )
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 "speed" -> {
                                     items(listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)) { s ->
                                         OptionRow(if (s == 1f) "Normal" else "${s}x", selected = speed == s) {
@@ -1171,7 +1391,12 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                 "source" -> {
                                     val vis = streams.indices.filter { !mixedAudio || dubOf(streams[it]) == dubOn }
                                     items(vis) { i ->
-                                        OptionRow("Server ${i + 1}", value = streams.getOrNull(i)?.quality?.takeIf { it.isNotBlank() }, selected = sourceIdx == i) {
+                                        OptionRow(
+                                            streams.getOrNull(i)?.quality
+                                                ?.takeIf { it.isNotBlank() }
+                                                ?: "Server ${i + 1}",
+                                            selected = sourceIdx == i,
+                                        ) {
                                             pendingStart = exo.currentPosition
                                             sourceIdx = i
                                             page = ""

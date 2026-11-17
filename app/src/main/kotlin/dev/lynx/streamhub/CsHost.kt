@@ -264,7 +264,11 @@ class CsExtension(private val api: MainAPI) : Extension {
         return r.javaClass.simpleName + (if (msg.isNotBlank()) ": $msg" else "")
     }
 
-    suspend fun streamsLive(episodeId: String, onStream: (ShStream) -> Unit) {
+    suspend fun streamsLive(
+        episodeId: String,
+        onSubtitle: (String, String) -> Unit = { _, _ -> },
+        onStream: (ShStream) -> Unit,
+    ) {
         lastError = null
         var count = 0
         var finished = false
@@ -272,7 +276,11 @@ class CsExtension(private val api: MainAPI) : Extension {
         withContext(Dispatchers.IO) {
             withTimeoutOrNull(90_000L) {
                 try {
-                    api.loadLinks(episodeId, false, { }, { l ->
+                    api.loadLinks(episodeId, false, { sub ->
+                        if (sub.url.isNotBlank()) {
+                            onSubtitle(sub.lang, sub.url)
+                        }
+                    }, { l ->
                         if (l.url.isNotBlank()) {
                             val ref: String? = l.referer
                             val hs: Map<String, String>? = l.headers

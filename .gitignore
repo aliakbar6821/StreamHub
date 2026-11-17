@@ -5,3 +5,6 @@ local.properties
 .idea/
 *.jks
 *.keystore
+
+# Local stabilization backups
+.patch-backups/
