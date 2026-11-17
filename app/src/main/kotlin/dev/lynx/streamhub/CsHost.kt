@@ -182,10 +182,13 @@ class CsExtension(private val api: MainAPI) : Extension {
                 ?: runCatching { api.search(query, page)?.items }.onFailure { err = describe(it) }.getOrNull()
                 ?: runCatching { api.quickSearch(query) }.onFailure { err = describe(it) }.getOrNull()
         }
+        val e2 = err
         lastSearchNote = when {
-            res == null && err == null -> "timed out"
-            res.isNullOrEmpty() -> err ?: "no results"
-            else -> res.size.toString()
+            !res.isNullOrEmpty() -> res.size.toString()
+            res != null -> "no results"
+            e2 != null && e2.startsWith("NotImplementedError") -> "no search support"
+            e2 != null -> e2
+            else -> "timed out"
         }
         (res ?: emptyList()).map { it.toItem() }
     }
