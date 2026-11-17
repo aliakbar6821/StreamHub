@@ -247,7 +247,7 @@ class CsExtension(private val api: MainAPI) : Extension {
                     })
                 } catch (t: Throwable) {
                     if (t is kotlinx.coroutines.CancellationException) throw t
-                    Log.w(TAG, "loadLinks failed for " + api.name, t)
+                    Log.w("CsHost", "loadLinks failed for " + api.name, t)
                     err = describe(t)
                 }
                 finished = true
