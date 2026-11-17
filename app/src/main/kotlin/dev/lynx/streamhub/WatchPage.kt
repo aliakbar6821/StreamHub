@@ -1,5 +1,10 @@
 package dev.lynx.streamhub
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -66,11 +71,58 @@ fun WatchInfo(
     subsOn: Boolean,
     speedLabel: String,
     onPage: (String) -> Unit,
-    onEpisode: (Episode) -> Unit,
+        onEpisode: (Episode) -> Unit,
+    onOpen: (MediaItem) -> Unit = {},
 ) {
     val sv = MaterialTheme.colorScheme.surfaceVariant
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
-    val isMovie = media.type == MediaType.MOVIE
+        val isMovie = media.type == MediaType.MOVIE
+    // SH_PATCH_03_RECOMMENDATIONS
+    var related by remember(media.id, extId) {
+        mutableStateOf<List<MediaItem>>(emptyList())
+    }
+    var relatedLoading by remember(media.id, extId) { mutableStateOf(false) }
+    var relatedError by remember(media.id, extId) { mutableStateOf<String?>(null) }
+    var relatedGenres by remember(media.id, extId) {
+        mutableStateOf<Set<String>>(emptySet())
+    }
+
+    LaunchedEffect(media.id, extId) {
+        related = emptyList()
+        relatedError = null
+        if (ext == null) {
+            relatedError = "Select a source to discover more titles."
+            return@LaunchedEffect
+        }
+        relatedLoading = true
+        try {
+            val result = withContext(Dispatchers.IO) {
+                withTimeoutOrNull(20_000L) {
+                    val genres = media.genres.map { it.trim().lowercase() }
+                        .filter { it.isNotEmpty() }.toSet()
+                    val candidates = ext.getHome().flatMap { it.items }
+                        .distinctBy { it.id }
+                        .filter { it.id != media.id && it.type == media.type }
+                    val ranked = candidates.sortedByDescending { candidate ->
+                        candidate.genres.count { it.trim().lowercase() in genres }
+                    }.take(20)
+                    genres to ranked
+                }
+            }
+            if (result == null) {
+                relatedError = "This source took too long to load suggestions."
+            } else {
+                relatedGenres = result.first
+                related = result.second
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            relatedError = "Suggestions are unavailable from this source."
+        } finally {
+            relatedLoading = false
+        }
+    }
     val listState = rememberLazyListState()
     val current = episodes.indexOfFirst { it.id == ep.id }
 
@@ -167,8 +219,47 @@ fun WatchInfo(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
-            items(episodes) { e ->
+                        items(episodes) { e ->
                 WatchEpisodeRow(media, e, e.id == ep.id, onDownload = { sheetEp = e }) { onEpisode(e) }
+            }
+        }
+        item {
+            Text(
+                "More from this source",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            )
+        }
+        if (relatedLoading) {
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(20.dp),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
+            }
+        } else if (related.isEmpty()) {
+            item {
+                Text(
+                    relatedError ?: "This source returned no other titles of this type.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+            }
+        } else {
+            items(related, key = { "related:" + it.id }) { candidate ->
+                RelatedWatchCard(
+                    candidate,
+                    candidate.genres.any {
+                        it.trim().lowercase() in relatedGenres
+                    },
+                ) { onOpen(candidate) }
             }
         }
     }
@@ -272,4 +363,80 @@ fun FadeVis(
         enter = androidx.compose.animation.fadeIn(),
         exit = androidx.compose.animation.fadeOut(),
     ) { content() }
+}
+
+
+/**
+ * Uses extension artwork as supplied. A poster is not misrepresented
+ * as an episode thumbnail, and no views or dates are fabricated.
+ */
+@Composable
+private fun RelatedWatchCard(
+    item: MediaItem,
+    sharesGenres: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 5.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.surfaceVariant.copy(alpha = 0.45f))
+            .clickable(onClick = onClick)
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AsyncImage(
+            model = item.poster,
+            contentDescription = item.title,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.width(84.dp).aspectRatio(2f / 3f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(colors.surfaceVariant),
+        )
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                item.title,
+                color = colors.onSurface,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val meta = listOfNotNull(
+                item.year?.toString(),
+                when (item.type) {
+                    MediaType.MOVIE -> "Movie"
+                    MediaType.ANIME -> "Anime"
+                    MediaType.SERIES -> "Series"
+                },
+            ).joinToString(" • ")
+            Text(
+                meta,
+                color = colors.onSurfaceVariant,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = 5.dp),
+            )
+            if (item.genres.isNotEmpty()) {
+                Text(
+                    item.genres.take(3).joinToString(" • "),
+                    color = colors.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 5.dp),
+                )
+            }
+            if (sharesGenres) {
+                Text(
+                    "Similar genres",
+                    color = colors.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 5.dp),
+                )
+            }
+        }
+        ItemMenu(item)
+    }
 }

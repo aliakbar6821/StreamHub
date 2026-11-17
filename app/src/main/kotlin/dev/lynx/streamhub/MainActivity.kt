@@ -70,7 +70,14 @@ fun App() {
     val item = openItem
     if (p != null) {
         BackHandler { playing = null }
-        PlayerScreen(p, onBack = { playing = null })
+        PlayerScreen(
+            p,
+            onBack = { playing = null },
+            onOpen = {
+                playing = null
+                openItem = it
+            },
+        )
     } else if (item != null) {
         BackHandler { openItem = null }
         Surface(Modifier.fillMaxSize()) {

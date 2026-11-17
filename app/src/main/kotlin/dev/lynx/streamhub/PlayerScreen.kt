@@ -225,7 +225,9 @@ private fun OptionRow(
     onClick: () -> Unit,
 ) {
     // SH_PATCH_02_OPTION_ROW
-    val fg = if (selected) Color.Black else Color.White
+    // SH_PATCH_03_OPTION_THEME
+    val colors = MaterialTheme.colorScheme
+    val fg = if (selected) colors.onPrimary else colors.onSurface
     val icon = when (title) {
         "Quality" -> Icons.Filled.Tune
         "Audio track" -> Icons.Filled.Mic
@@ -243,7 +245,7 @@ private fun OptionRow(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 3.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(if (selected) Color.White else Color.Transparent)
+            .background(if (selected) colors.primary else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 17.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -264,7 +266,7 @@ private fun OptionRow(
         if (value != null) {
             Text(
                 value,
-                color = if (selected) Color.DarkGray else Color.LightGray,
+                color = if (selected) colors.onPrimary.copy(alpha = 0.8f) else colors.onSurfaceVariant,
                 fontSize = 15.sp,
                 modifier = Modifier.weight(0.85f),
                 textAlign = androidx.compose.ui.text.style.TextAlign.End,
@@ -274,14 +276,18 @@ private fun OptionRow(
         }
         if (selected) {
             Icon(Icons.Filled.Check, contentDescription = "Selected",
-                tint = Color.Black, modifier = Modifier.size(22.dp))
+                tint = colors.onPrimary, modifier = Modifier.size(22.dp))
         }
     }
 }
 
 @OptIn(UnstableApi::class)
 @Composable
-fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
+fun PlayerScreen(
+    req: PlayRequest,
+    onBack: () -> Unit,
+    onOpen: (dev.lynx.streamhub.api.MediaItem) -> Unit = {},
+) {
     val context = LocalContext.current
     val activity = remember { context.findActivity() }
     PlayerPrefs.init(context)
@@ -1105,13 +1111,14 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                 ep = ep,
                 episodes = shownEps,
                 durMs = durMs,
-                audioLabel = if (hasDubChoice) (if (dubOn) "Dubbed" else "Original")
-                    else (audioOpts.firstOrNull { it.selected }?.label ?: "Default"),
+                audioLabel = audioOpts.firstOrNull { it.selected }?.label
+                    ?: "Not reported",
                 serverLabel = if (streams.isEmpty()) "Server" else "Server ${sourceIdx + 1}",
                 subsOn = textOn,
                 speedLabel = if (speed == 1f) "Speed" else "${speed}x",
                 onPage = { page = it },
                 onEpisode = { switchTo(it) },
+                onOpen = onOpen,
             )
         }
         }
@@ -1129,7 +1136,9 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                     .clickable(interactionSource = none, indication = null) { page = "" },
             ) {
                 Surface(
-                    color = PanelBg,
+                    color = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    // SH_PATCH_03_SHEET_THEME
                     shape = if (full) RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp) else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                     modifier = (if (full) Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.6f).widthIn(max = 360.dp)
                         else Modifier.align(Alignment.BottomCenter).navigationBarsPadding().fillMaxWidth().fillMaxHeight(0.6f))
@@ -1142,12 +1151,13 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                         ) {
                             if (page != "main") {
                                 IconButton(onClick = { page = "main" }) {
-                                    Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                                    Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
                                 }
                             }
                             Text(
                                 when (page) {
                                     "audio" -> "Audio"
+                                    "versions" -> "Source versions"
                                     "subs" -> "Subtitles"
                                     "quality" -> "Quality"
                                     "speed" -> "Playback speed"
@@ -1157,12 +1167,12 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                     "output" -> "Audio output"
                                     else -> "Settings"
                                 },
-                                color = Color.White,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.weight(1f).padding(start = 8.dp),
                             )
                             IconButton(onClick = { page = "" }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+                                Icon(Icons.Filled.Close, contentDescription = "Close", tint = MaterialTheme.colorScheme.onSurface)
                             }
                         }
                         val listState = rememberLazyListState()
@@ -1178,9 +1188,8 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                     item {
                                         OptionRow(
                                             "Audio track",
-                                            if (hasDubChoice) (if (dubOn) "Dubbed" else "Original")
-                                            else audioOpts.firstOrNull { it.selected }?.label
-                                                ?: if (audioOpts.isEmpty()) "Single track" else "Default",
+                                            audioOpts.firstOrNull { it.selected }?.label
+                                                ?: "Not reported",
                                         ) { page = "audio" }
                                     }
                                     item {
@@ -1239,7 +1248,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                 "substyle" -> {
                                     item {
                                         SubtitleStyleEditor(
-                                            dark = true,
+                                            dark = androidx.compose.foundation.isSystemInDarkTheme(),
                                             font = subFont,
                                             bold = subBold,
                                             scale = subScale,
@@ -1253,52 +1262,51 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                 }
 
                                 "audio" -> {
-                                    if (hasDubChoice) {
-                                        item {
-                                            Text(
-                                                "SOURCE VERSION",
-                                                color = Color.LightGray,
-                                                fontSize = 12.sp,
-                                                modifier = Modifier.padding(16.dp),
-                                            )
-                                        }
-                                        item {
-                                            OptionRow(
-                                                "Original source",
-                                                selected = !dubOn,
-                                            ) { setDub(false) }
-                                        }
-                                        item {
-                                            OptionRow(
-                                                "Dubbed source",
-                                                selected = dubOn,
-                                            ) { setDub(true) }
-                                        }
-                                    }
-                                    item {
-                                        Text(
-                                            "AUDIO TRACKS IN CURRENT STREAM",
-                                            color = Color.LightGray,
-                                            fontSize = 12.sp,
-                                            modifier = Modifier.padding(16.dp),
-                                        )
-                                    }
+                                    // SH_PATCH_03_AUDIO
                                     if (audioOpts.isEmpty()) {
                                         item {
                                             Text(
-                                                "No selectable audio tracks reported yet.",
-                                                color = Color.LightGray,
-                                                modifier = Modifier.padding(16.dp),
+                                                "This source has not reported any supported " +
+                                                    "audio tracks yet.",
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(20.dp),
                                             )
                                         }
                                     }
                                     items(audioOpts) { o ->
-                                        OptionRow(
-                                            o.label,
-                                            selected = o.selected,
-                                        ) {
+                                        OptionRow(o.label, selected = o.selected) {
                                             pickAudio(o)
                                             page = ""
+                                        }
+                                    }
+                                    if (hasDubChoice) {
+                                        item {
+                                            OptionRow(
+                                                "Other source versions",
+                                                "Separate video sources",
+                                            ) { page = "versions" }
+                                        }
+                                    }
+                                }
+
+                                "versions" -> {
+                                    item {
+                                        Text(
+                                            "These are separate video sources, not verified " +
+                                                "audio languages. After switching, Audio " +
+                                                "shows the tracks reported by that stream.",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(20.dp),
+                                        )
+                                    }
+                                    item {
+                                        OptionRow("Subbed source", selected = !dubOn) {
+                                            setDub(false)
+                                        }
+                                    }
+                                    item {
+                                        OptionRow("Dubbed source", selected = dubOn) {
+                                            setDub(true)
                                         }
                                     }
                                 }
@@ -1316,7 +1324,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                             Text(
                                                 "No supported subtitle tracks reported. " +
                                                     "Hardcoded subtitles cannot be toggled.",
-                                                color = Color.LightGray,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.padding(16.dp),
                                             )
                                         }
@@ -1335,7 +1343,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                         item {
                                             Text(
                                                 "This stream has a single quality. Other servers may offer more.",
-                                                color = Color(0xFFAAAAAA),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.padding(16.dp),
                                             )
                                         }
@@ -1349,7 +1357,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                             "Playback uses Android's current media output. " +
                                                 "Use system controls to choose connected " +
                                                 "Bluetooth or wired devices.",
-                                            color = Color.LightGray,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.padding(16.dp),
                                         )
                                     }

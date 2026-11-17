@@ -179,7 +179,7 @@ fun SheetSwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, color = Color.White, modifier = Modifier.weight(1f))
+        Text(title, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }
