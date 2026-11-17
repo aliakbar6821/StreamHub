@@ -34,6 +34,10 @@ object PlayerPrefs {
         get() = p?.getBoolean("autoNext", true) ?: true
         set(v) { p?.edit()?.putBoolean("autoNext", v)?.apply() }
 
+    var uiScale: Float
+        get() = p?.getFloat("uiScale", 0.82f) ?: 0.82f
+        set(v) { p?.edit()?.putFloat("uiScale", v)?.apply() }
+
     var subScale: Float
         get() = p?.getFloat("subScale", 1f) ?: 1f
         set(v) { p?.edit()?.putFloat("subScale", v)?.apply() }

@@ -66,14 +66,14 @@ private fun GroupRow(list: List<DownloadEntry>, edit: Boolean, onOpen: () -> Uni
     Row(Modifier.fillMaxWidth().clickable(onClick = onOpen), verticalAlignment = Alignment.CenterVertically) {
         AsyncImage(
             model = item.poster, contentDescription = null, contentScale = ContentScale.Crop,
-            modifier = Modifier.width(190.dp).aspectRatio(3f / 2f).clip(RoundedCornerShape(24.dp))
+            modifier = Modifier.width(128.dp).aspectRatio(3f / 2f).clip(RoundedCornerShape(14.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         )
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
-            Text(item.title, fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.Medium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            Text(item.title, fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(6.dp))
-            Text(countLabel(item, list.size), fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(countLabel(item, list.size), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (edit) IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, contentDescription = "Delete") }
     }
@@ -85,24 +85,24 @@ private fun DlRow(d: DownloadEntry, s: DlState, label: String, onPlay: () -> Uni
         Modifier.fillMaxWidth().clickable(enabled = s.done, onClick = onPlay).padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.width(170.dp).aspectRatio(5f / 3f).clip(RoundedCornerShape(20.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
+        Box(Modifier.width(112.dp).aspectRatio(5f / 3f).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
             AsyncImage(model = d.item.poster, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             Text(
                 if (d.item.type == MediaType.MOVIE) "MOVIE" else "EP ${d.episodeNumber.toInt()}",
-                color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).clip(RoundedCornerShape(50))
-                    .background(Color(0xAA000000)).padding(horizontal = 12.dp, vertical = 5.dp),
+                color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).clip(RoundedCornerShape(50))
+                    .background(Color(0xAA000000)).padding(horizontal = 8.dp, vertical = 3.dp),
             )
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 d.episodeTitle.ifBlank { epLabel(d.item, d.episodeNumber) },
-                fontSize = 21.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
             Text(
                 listOf(epLabel(d.item, d.episodeNumber), label).filter { it.isNotBlank() }.joinToString(" \u2022 "),
-                fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
                 when {
@@ -110,7 +110,7 @@ private fun DlRow(d: DownloadEntry, s: DlState, label: String, onPlay: () -> Uni
                     s.done -> mb(s.bytes)
                     else -> "${s.pct}% \u2022 ${mb(s.bytes)}"
                 },
-                fontSize = 17.sp,
+                fontSize = 12.sp,
                 color = if (s.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (!s.done && !s.failed) {
@@ -144,7 +144,7 @@ fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
             }
             if (groups.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                    Text("No downloads yet", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("No downloads yet", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
                 LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -171,14 +171,14 @@ fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
                 AsyncImage(
                     model = item.poster, contentDescription = null, contentScale = ContentScale.Crop,
                     modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(16f / 9f)
-                        .clip(RoundedCornerShape(26.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+                        .clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
                 )
             }
             item {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                    Text(item.title, fontSize = 36.sp, lineHeight = 40.sp, fontWeight = FontWeight.ExtraBold)
+                    Text(item.title, fontSize = 26.sp, lineHeight = 31.sp, fontWeight = FontWeight.ExtraBold)
                     Spacer(Modifier.height(6.dp))
-                    Text(sub, fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(sub, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             item {
@@ -186,13 +186,13 @@ fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
                     Button(
                         onClick = { playFirst() },
                         enabled = states.values.any { it.done },
-                        modifier = Modifier.weight(1f).height(60.dp),
+                        modifier = Modifier.weight(1f).height(48.dp),
                     ) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Play all", fontSize = 20.sp, fontWeight = FontWeight.Medium)
+                        Text("Play all", fontSize = 15.sp, fontWeight = FontWeight.Medium)
                     }
-                    FilledTonalIconButton(onClick = { confirm = true }, modifier = Modifier.size(60.dp)) {
+                    FilledTonalIconButton(onClick = { confirm = true }, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Filled.Delete, contentDescription = "Delete all")
                     }
                 }

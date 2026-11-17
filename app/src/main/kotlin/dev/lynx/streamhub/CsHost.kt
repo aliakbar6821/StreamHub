@@ -215,10 +215,25 @@ class CsExtension(private val api: MainAPI) : Extension {
         )
     }
 
+    /** Why the last streamsLive() call produced nothing (shown in the player and the download sheet). */
+    @Volatile var lastError: String? = null
+
+    private fun describe(t: Throwable): String {
+        var r: Throwable = t
+        var n = 0
+        while (r.cause != null && r.cause !== r && n < 8) { r = r.cause!!; n++ }
+        val msg = (r.message ?: "").take(300)
+        return r.javaClass.simpleName + (if (msg.isNotBlank()) ": $msg" else "")
+    }
+
     suspend fun streamsLive(episodeId: String, onStream: (ShStream) -> Unit) {
+        lastError = null
+        var count = 0
+        var finished = false
+        var err: String? = null
         withContext(Dispatchers.IO) {
             withTimeoutOrNull(90_000L) {
-                runCatching {
+                try {
                     api.loadLinks(episodeId, false, { }, { l ->
                         if (l.url.isNotBlank()) {
                             val ref: String? = l.referer
@@ -226,11 +241,22 @@ class CsExtension(private val api: MainAPI) : Extension {
                             val h = HashMap<String, String>(hs.orEmpty())
                             if (!ref.isNullOrBlank() && h.keys.none { it.equals("Referer", true) }) h["Referer"] = ref
                             val q = if (l.quality > 0) l.quality.toString() + "p" else null
+                            count++
                             onStream(ShStream(url = l.url, quality = listOfNotNull(l.name, q).joinToString(" "), headers = h))
                         }
                     })
+                } catch (t: Throwable) {
+                    if (t is kotlinx.coroutines.CancellationException) throw t
+                    Log.w(TAG, "loadLinks failed for " + api.name, t)
+                    err = describe(t)
                 }
+                finished = true
             }
+        }
+        lastError = err ?: when {
+            !finished -> "Plugin " + api.name + " took longer than 90s and returned nothing."
+            count == 0 -> "Plugin " + api.name + " finished but returned no links. Its site may be down or blocked, or it needs a feature this app lacks."
+            else -> null
         }
     }
 

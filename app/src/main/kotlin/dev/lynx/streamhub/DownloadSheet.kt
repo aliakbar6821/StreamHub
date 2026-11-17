@@ -106,7 +106,7 @@ fun DownloadSheet(media: MediaItem, ep: Episode, ext: Extension?, onDismiss: () 
                     Text("Finding sources\u2026 ${secs}s")
                 }
             } else if (streams.isEmpty()) {
-                Text(err ?: "This source returned no links for this one. Try another episode or plugin.", color = MaterialTheme.colorScheme.error)
+                Text(err ?: (ext as? CsExtension)?.lastError ?: "This source returned no links for this one. Try another episode or plugin.", color = MaterialTheme.colorScheme.error)
             } else {
                 Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
                     streams.forEachIndexed { i, s ->

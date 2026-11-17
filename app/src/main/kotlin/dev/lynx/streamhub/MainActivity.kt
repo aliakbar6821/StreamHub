@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         Store.init(this)
         PlayerPrefs.init(this)
+        UiScale.value = PlayerPrefs.uiScale
         setContent {
             StreamHubTheme {
                 App()

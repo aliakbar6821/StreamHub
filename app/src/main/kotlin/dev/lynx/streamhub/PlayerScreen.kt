@@ -498,7 +498,8 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
         val t0 = System.currentTimeMillis()
         val ticker = launch {
             while (streams.isEmpty()) {
-                srcInfo = "Finding sources... ${(System.currentTimeMillis() - t0) / 1000}s"
+                val secs = (System.currentTimeMillis() - t0) / 1000
+                srcInfo = "Finding sources... ${secs}s" + (if (secs > 20) "\nSlow plugin. Go back and try another one if this keeps going." else "")
                 delay(1000)
             }
         }
@@ -514,7 +515,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             } else {
                 streams = withContext(Dispatchers.IO) { e.getStreams(ep.id) }
             }
-            if (streams.isEmpty()) error = "No sources found for this episode. Try another plugin."
+            if (streams.isEmpty()) error = "No sources found for this episode.\n" + ((e as? CsExtension)?.lastError ?: "Try another plugin.")
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             if (streams.isEmpty()) error = t.message ?: "Failed to load sources"

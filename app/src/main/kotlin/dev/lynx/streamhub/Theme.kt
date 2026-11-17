@@ -1,10 +1,22 @@
 package dev.lynx.streamhub
+
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 
 val NavBg = Color(0xFF16161D)
+
+/** Whole-app size. 1.0 = the old big layout, 0.82 = default, 0.72 = small. */
+object UiScale {
+    var value by mutableFloatStateOf(0.82f)
+}
 
 @Composable
 fun StreamHubTheme(content: @Composable () -> Unit) {
@@ -25,5 +37,9 @@ fun StreamHubTheme(content: @Composable () -> Unit) {
         surfaceVariant = Color(0xFFEFEFEF), onSurfaceVariant = Color(0xFF5F5F66),
         outline = Color(0xFFBDBDC4), error = Color(0xFFB3261E),
     )
-    MaterialTheme(colorScheme = scheme, content = content)
+    val base = LocalDensity.current
+    // Only density is scaled: text size = sp * density * fontScale, so this shrinks dp and sp together.
+    CompositionLocalProvider(LocalDensity provides Density(base.density * UiScale.value, base.fontScale)) {
+        MaterialTheme(colorScheme = scheme, content = content)
+    }
 }

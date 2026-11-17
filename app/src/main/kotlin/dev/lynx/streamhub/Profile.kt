@@ -89,6 +89,14 @@ fun YouScreen() {
             HorizontalDivider(color = MaterialTheme.colorScheme.background, thickness = 2.dp)
             MenuRow(Icons.Filled.Info, "About") { about = true }
         }
+        Spacer(Modifier.height(20.dp))
+        Text("Interface size", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PillChip("Small", UiScale.value == 0.72f) { UiScale.value = 0.72f; PlayerPrefs.uiScale = 0.72f }
+            PillChip("Medium", UiScale.value == 0.82f) { UiScale.value = 0.82f; PlayerPrefs.uiScale = 0.82f }
+            PillChip("Large", UiScale.value == 1f) { UiScale.value = 1f; PlayerPrefs.uiScale = 1f }
+        }
     }
 
     if (edit) {
