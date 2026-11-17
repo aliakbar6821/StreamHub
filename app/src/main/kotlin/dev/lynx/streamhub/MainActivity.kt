@@ -81,7 +81,7 @@ fun App() {
         }
     } else if (showSearch) {
         BackHandler { showSearch = false }
-        Surface(Modifier.fillMaxSize().statusBarsPadding()) {
+        Surface(Modifier.fillMaxSize()) {
             SearchScreen(
                 onBack = { showSearch = false },
                 onOpen = { openItem = it },
