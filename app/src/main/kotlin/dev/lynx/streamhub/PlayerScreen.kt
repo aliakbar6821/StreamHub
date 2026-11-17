@@ -165,17 +165,9 @@ private fun trackOpts(tracks: Tracks, type: Int): List<TrackOpt> {
                 !lab.isNullOrBlank() && name != null && !lab.contains(name, true) -> "$name ($lab)"
                 !lab.isNullOrBlank() -> lab
                 name != null -> name
-                else -> buildList {
-                    add(if (type == C.TRACK_TYPE_TEXT)
-                        "Unknown subtitle language"
-                    else "Unknown audio language")
-                    f.sampleMimeType?.substringAfter('/')?.let {
-                        add(it.uppercase(Locale.ROOT))
-                    }
-                    if (type == C.TRACK_TYPE_AUDIO && f.channelCount > 0) {
-                        add("${f.channelCount} ch")
-                    }
-                }.joinToString(" • ")
+                else -> if (type == C.TRACK_TYPE_TEXT)
+                    "Subtitle ${out.size + 1} · language not provided"
+                else "Audio ${out.size + 1} · language not provided"
             }
             out.add(TrackOpt(label, g, i, g.isTrackSelected(i), f.language, f.height))
         }
@@ -306,7 +298,11 @@ fun PlayerScreen(
     var reloadKey by remember { mutableIntStateOf(0) }
     var srcInfo by remember { mutableStateOf("") }
     var episodes by remember { mutableStateOf<List<Episode>>(emptyList()) }
-    var dubOn by remember { mutableStateOf(PlayerPrefs.preferDub) }
+    // The requested episode already identifies its source version.
+    var dubOn by remember {
+        mutableStateOf((req.ext as? CsExtension)?.dubEpisodes(req.item.id)
+            ?.any { it.id == req.episode.id } == true)
+    }
     val dubList = (req.ext as? CsExtension)?.dubEpisodes(req.item.id) ?: emptyList()
     val shownEps = if (dubOn && dubList.isNotEmpty()) dubList else episodes
     var full by remember { mutableStateOf(false) }
@@ -337,6 +333,9 @@ fun PlayerScreen(
     var subPos by remember { mutableFloatStateOf(PlayerPrefs.subPos) }
     var skippedFor by remember { mutableStateOf("") }
     var dlSheet by remember { mutableStateOf(false) }
+    var episodeDownload by remember { mutableStateOf<Episode?>(null) }
+    var newestEpisodes by remember(req.item.id) { mutableStateOf(false) }
+    var episodeRange by remember(req.item.id) { mutableIntStateOf(0) }
     var scrub by remember { mutableStateOf<Float?>(null) }
 
     val http = remember {
@@ -402,23 +401,32 @@ fun PlayerScreen(
             page = ""
             return
         }
-        val idx = shownEps.indexOfFirst { it.id == ep.id }
-        val pos = exo.currentPosition
-        dubOn = want
-        PlayerPrefs.preferDub = want
+        val pos = exo.currentPosition.coerceAtLeast(0L)
         if (dubList.isNotEmpty()) {
             val to = if (want) dubList else episodes
-            val target = to.getOrNull(if (idx >= 0) idx else 0)
-            if (target != null) {
-                switchTo(target)
-                pendingStart = pos
+            val season = ep.title?.substringBefore(" · ")?.takeIf { it.matches(Regex("S[0-9]+")) }
+            val target = to.firstOrNull { candidate ->
+                candidate.number == ep.number &&
+                    (season == null || candidate.title?.startsWith("$season · ") == true)
             }
+            if (target == null) {
+                showHud("No matching episode in that source version")
+                return
+            }
+            dubOn = want
+            PlayerPrefs.preferDub = want
+            switchTo(target)
+            pendingStart = pos
         } else {
             val i = streams.indexOfFirst { dubOf(it) == want }
-            if (i >= 0) {
-                pendingStart = pos
-                sourceIdx = i
+            if (i < 0) {
+                showHud("No matching source version available")
+                return
             }
+            dubOn = want
+            PlayerPrefs.preferDub = want
+            pendingStart = pos
+            sourceIdx = i
         }
         page = ""
     }
@@ -618,6 +626,21 @@ fun PlayerScreen(
 
     // 1) collect sources for this episode (first one arrives early, others keep coming)
     LaunchedEffect(ep.id, reloadKey) {
+        if (req.localPath == null) {
+            exo.stop()
+            exo.clearMediaItems()
+            tracks = Tracks.EMPTY
+            isPlaying = false
+            buffering = true
+            qualityH = -1
+            exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                .build()
+        }
+        sourceIdx = 0
+        error = null
         streams = emptyList()
         remoteSubs = emptyList()
         streamsFor = ep.id
@@ -662,10 +685,12 @@ fun PlayerScreen(
             } else {
                 streams = withContext(Dispatchers.IO) { e.getStreams(ep.id) }
             }
-            if (streams.isEmpty()) error = "Couldn't find a source for this episode. Tap Retry or try another episode."
+            if (streams.isEmpty()) error = (e as? CsExtension)?.lastError
+                ?: "This source returned no playable links. Try another version or extension."
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
-            if (streams.isEmpty()) error = "Couldn't load sources. Tap Retry."
+            if (streams.isEmpty()) error = "Source lookup failed: " +
+                (t.message ?: t.javaClass.simpleName).take(240)
         } finally {
             ticker.cancel()
         }
@@ -699,7 +724,9 @@ fun PlayerScreen(
             remoteSubs.isNotEmpty()
         ) {
             val current = exo.currentMediaItem
-            if (current != null) {
+            if (current != null && streams.getOrNull(sourceIdx)?.url ==
+                current.localConfiguration?.uri?.toString()
+            ) {
                 val existing = current.localConfiguration
                     ?.subtitleConfigurations.orEmpty()
                 val merged = (existing + remoteSubtitleConfigs())
@@ -721,6 +748,9 @@ fun PlayerScreen(
 
     // 2) play the selected source; fall back to the next one on error or stall
     LaunchedEffect(ep.id, sourceIdx, attempt, streamsFor, streams.isEmpty()) {
+        if (req.localPath == null && (streamsFor != ep.id || streams.isEmpty())) {
+            return@LaunchedEffect
+        }
         error = null
         try {
             val lp = req.localPath
@@ -738,9 +768,15 @@ fun PlayerScreen(
                 if (hlsIdx == sourceIdx || s.url.contains("m3u8", true)) b.setMimeType(MimeTypes.APPLICATION_M3U8)
                 srcInfo = "Source ${sourceIdx + 1} of ${streams.size}" +
                     (s.quality?.takeIf { it.isNotBlank() }?.let { " - $it" } ?: "")
+                tracks = Tracks.EMPTY
+                exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                    .build()
                 exo.setMediaItem(b.build())
             }
-            if (pendingStart > 5000L) exo.seekTo(pendingStart - 3000L)
+            if (pendingStart > 0L) exo.seekTo(pendingStart)
             pendingStart = 0L
             exo.prepare()
             exo.playWhenReady = true
@@ -813,9 +849,12 @@ fun PlayerScreen(
     }
     BackHandler(enabled = page.isNotEmpty()) { page = "" }
 
-    val audioOpts = trackOpts(tracks, C.TRACK_TYPE_AUDIO)
-    val textOpts = trackOpts(tracks, C.TRACK_TYPE_TEXT)
-    val videoOpts = trackOpts(tracks, C.TRACK_TYPE_VIDEO)
+    val activeTracks = if (req.localPath != null ||
+        (streamsFor == ep.id && streams.isNotEmpty() && error == null)) tracks else Tracks.EMPTY
+    val drawerEpisodes = episodeWindow(shownEps, newestEpisodes, episodeRange)
+    val audioOpts = trackOpts(activeTracks, C.TRACK_TYPE_AUDIO)
+    val textOpts = trackOpts(activeTracks, C.TRACK_TYPE_TEXT)
+    val videoOpts = trackOpts(activeTracks, C.TRACK_TYPE_VIDEO)
     val qualities = videoOpts.map { it.height }.filter { it > 0 }.distinct().sortedDescending()
     val textOn = textOpts.any { it.selected }
 
@@ -1066,7 +1105,9 @@ fun PlayerScreen(
 
         error?.let {
             Column(
-                Modifier.align(Alignment.Center).padding(24.dp),
+                Modifier.align(Alignment.Center).padding(16.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xEE111111)).padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(it, color = Color(0xFFFF6B6B))
@@ -1113,7 +1154,8 @@ fun PlayerScreen(
                 durMs = durMs,
                 audioLabel = audioOpts.firstOrNull { it.selected }?.label
                     ?: "Not reported",
-                serverLabel = if (streams.isEmpty()) "Server" else "Server ${sourceIdx + 1}",
+                serverLabel = streams.getOrNull(sourceIdx)?.quality?.takeIf { it.isNotBlank() }
+                    ?: "Server",
                 subsOn = textOn,
                 speedLabel = if (speed == 1f) "Speed" else "${speed}x",
                 onPage = { page = it },
@@ -1123,6 +1165,11 @@ fun PlayerScreen(
         }
         }
 
+        episodeDownload?.let { selected ->
+            DownloadSheet(req.item, selected, req.ext ?: Store.ownerOf(req.item.id)) {
+                episodeDownload = null
+            }
+        }
         if (dlSheet) {
             DownloadSheet(req.item, ep, req.ext ?: Store.ownerOf(req.item.id)) { dlSheet = false }
         }
@@ -1140,7 +1187,9 @@ fun PlayerScreen(
                     contentColor = MaterialTheme.colorScheme.onSurface,
                     // SH_PATCH_03_SHEET_THEME
                     shape = if (full) RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp) else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                    modifier = (if (full) Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.6f).widthIn(max = 360.dp)
+                    modifier = (if (full) Modifier.align(Alignment.CenterEnd).fillMaxHeight()
+                            .fillMaxWidth(if (page == "episodes") 0.48f else 0.6f)
+                            .widthIn(max = if (page == "episodes") 520.dp else 360.dp)
                         else Modifier.align(Alignment.BottomCenter).navigationBarsPadding().fillMaxWidth().fillMaxHeight(0.6f))
                         .pointerInput(Unit) { detectTapGestures { } },
                 ) {
@@ -1176,8 +1225,17 @@ fun PlayerScreen(
                             }
                         }
                         val listState = rememberLazyListState()
-                        LaunchedEffect(page) {
-                            if (page == "episodes" && curIdx > 0) listState.scrollToItem(curIdx)
+                        LaunchedEffect(page, episodeRange, newestEpisodes) {
+                            if (page == "episodes") {
+                                val index = drawerEpisodes.indexOfFirst { it.id == ep.id }
+                                if (index >= 0) listState.scrollToItem(index + 1)
+                            }
+                        }
+                        LaunchedEffect(page, shownEps.size) {
+                            if (page == "episodes") {
+                                val index = chronologicalEpisodes(shownEps).indexOfFirst { it.id == ep.id }
+                                episodeRange = if (index < 0) 0 else index / 100
+                            }
                         }
                         LazyColumn(Modifier.fillMaxSize(), state = listState) {
                             when (page) {
@@ -1398,6 +1456,16 @@ fun PlayerScreen(
 
                                 "source" -> {
                                     val vis = streams.indices.filter { !mixedAudio || dubOf(streams[it]) == dubOn }
+                                    if (vis.isEmpty()) {
+                                        item {
+                                            Text("No playable servers returned. Retry or choose another source version.",
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(20.dp))
+                                        }
+                                        if (hasDubChoice) {
+                                            item { OptionRow("Other source versions") { page = "versions" } }
+                                        }
+                                    }
                                     items(vis) { i ->
                                         OptionRow(
                                             streams.getOrNull(i)?.quality
@@ -1413,12 +1481,15 @@ fun PlayerScreen(
                                 }
 
                                 "episodes" -> {
-                                    items(shownEps) { e ->
-                                        OptionRow(
-                                            "${e.number.toInt()}. ${e.title?.takeIf { it.isNotBlank() } ?: "Episode ${e.number.toInt()}"}",
-                                            value = if (Store.isWatched(e.id)) "Watched" else null,
-                                            selected = e.id == ep.id,
-                                        ) { if (e.id != ep.id) switchTo(e) }
+                                    item {
+                                        EpisodeControls(shownEps.size, newestEpisodes, episodeRange,
+                                            { newestEpisodes = it }, { episodeRange = it })
+                                    }
+                                    items(drawerEpisodes, key = { it.id }) { e ->
+                                        WatchEpisodeRow(req.item, e, e.id == ep.id,
+                                            onDownload = { episodeDownload = e }) {
+                                            if (e.id != ep.id) switchTo(e)
+                                        }
                                     }
                                 }
                             }

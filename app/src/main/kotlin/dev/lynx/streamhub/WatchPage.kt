@@ -100,7 +100,11 @@ fun WatchInfo(
                 withTimeoutOrNull(20_000L) {
                     val genres = media.genres.map { it.trim().lowercase() }
                         .filter { it.isNotEmpty() }.toSet()
-                    val candidates = ext.getHome().flatMap { it.items }
+                    val cached = Session.sections.flatMap { it.items }
+                        .filter { Session.owner[it.id]?.id == ext.id }
+                    val feed = if (cached.isNotEmpty()) cached else ext.getHome().flatMap { it.items }
+                    feed.forEach { Session.owner[it.id] = ext }
+                    val candidates = feed
                         .distinctBy { it.id }
                         .filter { it.id != media.id && it.type == media.type }
                     val ranked = candidates.sortedByDescending { candidate ->
@@ -124,15 +128,27 @@ fun WatchInfo(
         }
     }
     val listState = rememberLazyListState()
-    val current = episodes.indexOfFirst { it.id == ep.id }
+    var tab by remember(media.id) { mutableStateOf(if (isMovie) 1 else 0) }
+    var newest by remember(media.id) { mutableStateOf(false) }
+    var range by remember(media.id) { mutableStateOf(0) }
+    val visibleEpisodes = episodeWindow(episodes, newest, range)
+    val current = visibleEpisodes.indexOfFirst { it.id == ep.id }
 
-    LaunchedEffect(episodes.size) {
-        if (current > 2) listState.scrollToItem(3 + current)
+    LaunchedEffect(ep.id, episodes.size) {
+        val index = chronologicalEpisodes(episodes).indexOfFirst { it.id == ep.id }
+        range = if (index < 0) 0 else index / 100
+    }
+
+    LaunchedEffect(ep.id, tab, range, newest, visibleEpisodes.size) {
+        if (!isMovie && tab == 0 && current > 2) {
+            // Three header items, tabs, episode heading and sorting controls.
+            listState.scrollToItem(6 + current)
+        }
     }
 
     var sheetEp by remember { mutableStateOf<Episode?>(null) }
     sheetEp?.let { DownloadSheet(media, it, ext) { sheetEp = null } }
-    val title = ep.title?.takeIf { it.isNotBlank() } ?: media.title
+    val title = cleanMediaText(ep.title?.takeIf { it.isNotBlank() } ?: media.title)
     val meta = buildList {
         if (!isMovie) add("Episode ${ep.number.toInt()}")
         if (durMs > 0L) add("${(durMs / 60000L).coerceAtLeast(1L)} min")
@@ -202,14 +218,23 @@ fun WatchInfo(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                PillChip("Audio: $audioLabel", false) { onPage("audio") }
-                PillChip(serverLabel, false) { onPage("source") }
+                PillChip("Audio: ${audioLabel.substringBefore(" · ").take(28)}", false) { onPage("audio") }
+                PillChip(serverLabel.take(30), false) { onPage("source") }
                 PillChip(if (subsOn) "Subtitles \u2713" else "Subtitles", false) { onPage("subs") }
                 PillChip(speedLabel, false) { onPage("speed") }
                 PillChip("Settings", false) { onPage("main") }
             }
         }
-        if (episodes.size > 1) {
+        if (!isMovie && episodes.size > 1) {
+            item {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PillChip("Episodes", tab == 0) { tab = 0 }
+                    PillChip("More like this", tab == 1) { tab = 1 }
+                }
+            }
+        }
+        if (!isMovie && tab == 0 && episodes.size > 1) {
             item {
                 Text(
                     "Episodes (${episodes.size})",
@@ -219,10 +244,15 @@ fun WatchInfo(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
-                        items(episodes) { e ->
+            item {
+                EpisodeControls(episodes.size, newest, range,
+                    { newest = it }, { range = it })
+            }
+            items(visibleEpisodes, key = { it.id }) { e ->
                 WatchEpisodeRow(media, e, e.id == ep.id, onDownload = { sheetEp = e }) { onEpisode(e) }
             }
         }
+        if (isMovie || tab == 1 || episodes.size <= 1) {
         item {
             Text(
                 "More from this source",
@@ -262,11 +292,12 @@ fun WatchInfo(
                 ) { onOpen(candidate) }
             }
         }
+        }
     }
 }
 
 @Composable
-private fun WatchEpisodeRow(item: MediaItem, e: Episode, current: Boolean, onDownload: () -> Unit, onClick: () -> Unit) {
+internal fun WatchEpisodeRow(item: MediaItem, e: Episode, current: Boolean, onDownload: () -> Unit, onClick: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val sv = MaterialTheme.colorScheme.surfaceVariant
     val status = when {
@@ -308,7 +339,7 @@ private fun WatchEpisodeRow(item: MediaItem, e: Episode, current: Boolean, onDow
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                e.title?.takeIf { it.isNotBlank() } ?: "Episode ${e.number.toInt()}",
+                cleanMediaText(e.title?.takeIf { it.isNotBlank() } ?: "Episode ${e.number.toInt()}"),
                 color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,

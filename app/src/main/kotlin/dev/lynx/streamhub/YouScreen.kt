@@ -172,18 +172,22 @@ fun ExtensionsScreen() {
                                 status = null
                                 try {
                                     if (e.pkg.startsWith("cs3:")) {
-                                        CsHost.install(context, e)
-                                        Session.reload(context)
-                                        status = "Installed " + e.name + ". It now appears in Home and Search."
+                                        CsHost.install(context, e) { phase ->
+                                            scope.launch { status = phase }
+                                        }
+                                        Session.refreshRegistry(context)
                                     } else {
                                         val f = Repos.download(context, e)
                                         Repos.launchInstall(context, f)
                                         status = "Confirm the install prompt, then tap Refresh and Reload extensions."
                                     }
-                                } catch (t: Throwable) {
+                                } catch (cancel: kotlinx.coroutines.CancellationException) {
+                                    throw cancel
+                                } catch (t: Exception) {
                                     status = "Install failed: ${t.message}"
+                                } finally {
+                                    busy = null
                                 }
-                                busy = null
                             }
                         },
                     ) { Text(if (busy == e.pkg) "..." else label) }

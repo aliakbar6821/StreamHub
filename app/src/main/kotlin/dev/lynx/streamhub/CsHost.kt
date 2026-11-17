@@ -31,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
@@ -45,6 +46,8 @@ object CsHost {
     private const val TAG = "CsHost"
     private val loaded = HashSet<String>()
     @Volatile private var fired = false
+    private val adapters = java.util.IdentityHashMap<MainAPI, CsExtension>()
+    private val installLock = kotlinx.coroutines.sync.Mutex()
 
     private fun dir(c: Context) = File(c.filesDir, "cs3").apply { mkdirs() }
     private fun prefs(c: Context) = c.getSharedPreferences("cs3_installed", Context.MODE_PRIVATE)
@@ -55,27 +58,83 @@ object CsHost {
         return if (prefs(c).contains(k) && File(dir(c), "$k.cs3").exists()) prefs(c).getLong(k, 1L) else null
     }
 
-    suspend fun install(c: Context, e: RepoExt) = withContext(Dispatchers.IO) {
-        val app = c.applicationContext
-        CloudStreamApp.setContext(app)
-        val k = key(e.pkg)
-        val f = File(dir(app), "$k.cs3")
-        if (f.exists()) f.delete()
-        val con = URL(e.apk).openConnection() as HttpURLConnection
-        con.connectTimeout = 15000
-        con.readTimeout = 60000
-        con.instanceFollowRedirects = true
-        con.setRequestProperty("User-Agent", "StreamHub/0.1")
-        try {
-            con.inputStream.use { i -> f.outputStream().use { i.copyTo(it) } }
-        } finally {
-            con.disconnect()
+    suspend fun install(
+        c: Context,
+        e: RepoExt,
+        progress: (String) -> Unit = {},
+    ) = installLock.withLock {
+        withContext(Dispatchers.IO) {
+            val started = android.os.SystemClock.elapsedRealtime()
+            val app = c.applicationContext
+            CloudStreamApp.setContext(app)
+            val k = key(e.pkg)
+            val target = File(dir(app), "$k.cs3")
+            val temporary = File.createTempFile("install-", ".part", dir(app))
+            val previous = File(dir(app), "$k.previous")
+            val alreadyLoaded = synchronized(this@CsHost) {
+                loaded.contains(target.absolutePath)
+            }
+            try {
+                progress("Downloading ${e.name}…")
+                val con = URL(e.apk).openConnection() as HttpURLConnection
+                con.connectTimeout = 15000
+                con.readTimeout = 30000
+                con.instanceFollowRedirects = true
+                con.setRequestProperty("User-Agent", "StreamHub/0.1")
+                try {
+                    require(con.responseCode in 200..299) {
+                        "Download failed: HTTP ${con.responseCode}"
+                    }
+                    var total = 0L
+                    con.inputStream.use { input ->
+                        temporary.outputStream().buffered().use { output ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                val n = input.read(buffer)
+                                if (n < 0) break
+                                total += n
+                                require(total <= 64L * 1024L * 1024L) {
+                                    "Plugin exceeds 64 MB limit"
+                                }
+                                output.write(buffer, 0, n)
+                            }
+                        }
+                    }
+                    require(total > 0) { "Empty plugin download" }
+                    val expected = con.contentLengthLong
+                    require(expected < 0 || total == expected) { "Incomplete plugin download" }
+                } finally { con.disconnect() }
+                progress("Checking ${e.name}…")
+                java.util.zip.ZipFile(temporary).use { zip ->
+                    val manifest = zip.getEntry("manifest.json")
+                        ?: error("Not a CloudStream plugin: missing manifest")
+                    val metadata = JSONObject(zip.getInputStream(manifest).bufferedReader().use { it.readText() })
+                    require(metadata.optString("pluginClassName").isNotBlank()) {
+                        "Plugin manifest has no entry class"
+                    }
+                    require(zip.getEntry("classes.dex") != null) { "Plugin has no classes.dex" }
+                }
+                if (previous.exists()) require(previous.delete()) { "Cannot clear previous backup" }
+                if (target.exists()) require(target.renameTo(previous)) { "Cannot back up installed plugin" }
+                try {
+                    require(temporary.renameTo(target)) { "Cannot publish downloaded plugin" }
+                    require(target.setReadOnly()) { "Cannot protect plugin code" }
+                    if (!alreadyLoaded) {
+                        progress("Loading ${e.name}…")
+                        require(loadPlugin(app, target)) { "Plugin could not be loaded; check device logs" }
+                    }
+                    prefs(app).edit().putLong(k, e.version).apply()
+                    previous.delete()
+                } catch (t: Throwable) {
+                    target.delete()
+                    if (previous.exists()) previous.renameTo(target)
+                    throw t
+                }
+                progress(if (alreadyLoaded) "Updated. Restart StreamHub to activate this version."
+                    else "Installed ${e.name}. Home will refresh when opened.")
+                Log.i(TAG, "Install ${e.name}: ${android.os.SystemClock.elapsedRealtime() - started} ms")
+            } finally { temporary.delete() }
         }
-        f.setReadOnly()
-        if (!loadPlugin(app, f)) {
-            if (!loaded.contains(f.absolutePath)) throw Exception("Plugin could not be loaded")
-        }
-        prefs(app).edit().putLong(k, e.version).apply()
     }
 
     private fun buildResources(c: Context, f: File): Resources {
@@ -127,7 +186,7 @@ object CsHost {
         }
         return APIHolder.allProviders
             .filter { it.sourcePlugin != null && !it.supportedTypes.contains(TvType.NSFW) }
-            .map { CsExtension(it) }
+            .map { api -> adapters.getOrPut(api) { CsExtension(api) } }
     }
 }
 
@@ -156,7 +215,7 @@ class CsExtension(private val api: MainAPI) : Extension {
         val t: TvType? = this.type
         return MediaItem(
             id = "cs3|" + api.name + "|" + this.url,
-            title = this.name,
+            title = cleanMediaText(this.name),
             poster = this.posterUrl,
             type = t.toMediaType(),
         )
@@ -217,8 +276,8 @@ class CsExtension(private val api: MainAPI) : Extension {
                 val s = e.season
                 ShEpisode(
                     id = e.data,
-                    number = (i + 1).toFloat(),
-                    title = if (s != null && s > 1) "S$s · $label" else label,
+                    number = e.episode?.toFloat() ?: (i + 1).toFloat(),
+                    title = cleanMediaText(if (s != null && s > 1) "S$s · $label" else label),
                     thumbnail = e.posterUrl,
                 )
             }
@@ -230,7 +289,7 @@ class CsExtension(private val api: MainAPI) : Extension {
         if (dubRaw.isNotEmpty()) {
             dubs[id] = dubRaw.mapIndexed { i, e ->
                 val label = e.name?.takeIf { it.isNotBlank() } ?: ("Episode " + (e.episode ?: (i + 1)))
-                ShEpisode(id = e.data, number = (i + 1).toFloat(), title = label, thumbnail = e.posterUrl)
+                ShEpisode(id = e.data, number = e.episode?.toFloat() ?: (i + 1).toFloat(), title = cleanMediaText(label), thumbnail = e.posterUrl)
             }
         } else {
             dubs.remove(id)
@@ -239,7 +298,7 @@ class CsExtension(private val api: MainAPI) : Extension {
         MediaDetails(
             item = MediaItem(
                 id = id,
-                title = lr.name,
+                title = cleanMediaText(lr.name),
                 poster = lr.posterUrl,
                 type = t.toMediaType(),
                 genres = lr.tags ?: emptyList(),
