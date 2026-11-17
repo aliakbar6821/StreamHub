@@ -2,6 +2,7 @@ package dev.lynx.streamhub
 
 import android.content.Context
 import android.content.Intent
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -43,6 +44,8 @@ fun PillChip(label: String, selected: Boolean, onClick: () -> Unit) {
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
             .background(bg)
+            .border(1.dp, if (selected) bg else MaterialTheme.colorScheme.outlineVariant,
+                RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
     )
@@ -52,14 +55,14 @@ fun PillChip(label: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 fun ItemMenu(item: MediaItem, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var open by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
     Box(modifier) {
         Box(
             Modifier
                 .size(28.dp)
                 .clip(CircleShape)
                 .background(Color(0x99000000))
-                .clickable { open = true },
+                .clickable { expanded = true },
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -69,19 +72,19 @@ fun ItemMenu(item: MediaItem, modifier: Modifier = Modifier) {
                 modifier = Modifier.size(18.dp),
             )
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
                 text = { Text(if (Store.inList(item.id)) "Remove from My List" else "Add to My List") },
                 onClick = {
                     Store.toggleList(item, Session.owner[item.id]?.id ?: Store.extIdFor(item.id) ?: "")
-                    open = false
+                    expanded = false
                 },
             )
             DropdownMenuItem(
                 text = { Text("Share") },
                 onClick = {
                     shareText(context, item.title)
-                    open = false
+                    expanded = false
                 },
             )
         }

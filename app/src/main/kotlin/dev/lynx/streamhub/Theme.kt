@@ -38,13 +38,13 @@ fun StreamHubTheme(content: @Composable () -> Unit) {
         primary = Color.Black, onPrimary = Color.White,
         primaryContainer = Color(0xFFE6E6E6), onPrimaryContainer = Color.Black,
         secondary = Color(0xFF2E7D32),
-        background = Color.White, onBackground = Color(0xFF111111),
+        background = Color(0xFFFAFAFA), onBackground = Color(0xFF111111),
         surface = Color.White, onSurface = Color(0xFF111111),
         surfaceVariant = Color(0xFFEFEFEF), onSurfaceVariant = Color(0xFF5F5F66),
         outline = Color(0xFFBDBDC4), error = Color(0xFFB3261E),
     )
-    val popup = if (dark) Color(0xFF211F1D) else Color.White
-    val muted = if (dark) Color(0xFF33312F) else Color(0xFFF0F0F0)
+    val popup = if (dark) Color(0xFF211F1D) else Color(0xFFF7F7F7)
+    val muted = if (dark) Color(0xFF33312F) else Color(0xFFEAEAEA)
     val fg = if (dark) Color.White else Color.Black
     val scheme = baseScheme.copy(
         surfaceTint = Color.Transparent,

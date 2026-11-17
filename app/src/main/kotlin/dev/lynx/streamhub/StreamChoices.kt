@@ -63,6 +63,9 @@ fun bestStreamIndex(streams: List<Stream>, language: String, height: Int?, codec
             when { codec != null && c == codec -> 0; c == "avc" -> 1; c == null -> 2; else -> 3 }
         }.thenByDescending { streamChoice(streams[it]).height ?: 0 }).firstOrNull()
 
+fun downloadChoicesAtHeight(streams: List<Stream>, height: Int?): List<Stream> =
+    streams.filter { streamChoice(it).height == height }
+
 /** Short-lived, in-memory reuse of already discovered signed video links. */
 object StreamChoiceCache {
     private data class Entry(val time: Long, val streams: List<Stream>)

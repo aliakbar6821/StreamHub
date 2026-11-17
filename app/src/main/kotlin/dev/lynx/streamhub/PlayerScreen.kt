@@ -23,6 +23,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.border
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -238,7 +240,9 @@ private fun OptionRow(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 3.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(if (selected) colors.primary else Color.Transparent)
+            .background(if (selected) colors.primary else colors.surface)
+            .border(1.dp, if (selected) colors.primary else colors.outlineVariant,
+                RoundedCornerShape(18.dp))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 17.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -299,6 +303,13 @@ fun PlayerScreen(
     var reloadKey by remember { mutableIntStateOf(0) }
     var srcInfo by remember { mutableStateOf("") }
     var episodes by remember { mutableStateOf<List<Episode>>(emptyList()) }
+    var titleGenres by remember(req.item.id) { mutableStateOf(req.item.genres) }
+    var related by remember(req.item.id) { mutableStateOf<List<dev.lynx.streamhub.api.MediaItem>>(emptyList()) }
+    var relatedLoading by remember(req.item.id) { mutableStateOf(false) }
+    var relatedLoaded by remember(req.item.id) { mutableStateOf(false) }
+    var relatedError by remember(req.item.id) { mutableStateOf<String?>(null) }
+    var relatedRefresh by remember(req.item.id) { mutableIntStateOf(0) }
+    var reaction by remember(req.item.id) { mutableIntStateOf(AppPrefs.reaction(req.item.id)) }
     // The requested episode already identifies its source version.
     var dubOn by remember {
         mutableStateOf((req.ext as? CsExtension)?.dubEpisodes(req.item.id)
@@ -654,11 +665,11 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(full) {
+    LaunchedEffect(full, PlayerWindowState.inPip) {
         val act = activity
         if (act != null) {
             val ctl = WindowCompat.getInsetsController(act.window, act.window.decorView)
-            if (full) ctl.hide(WindowInsetsCompat.Type.systemBars()) else ctl.show(WindowInsetsCompat.Type.systemBars())
+            if (full || PlayerWindowState.inPip) ctl.hide(WindowInsetsCompat.Type.systemBars()) else ctl.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -674,7 +685,10 @@ fun PlayerScreen(
         val e = req.ext
         episodes = if (e != null) {
             try {
-                withContext(Dispatchers.IO) { e.getDetails(req.item.id).episodes }
+                withContext(Dispatchers.IO) { e.getDetails(req.item.id) }.let { details ->
+                    titleGenres = details.item.genres
+                    details.episodes
+                }
             } catch (t: Throwable) {
                 emptyList()
             }
@@ -702,6 +716,8 @@ fun PlayerScreen(
                 .build()
         }
         sourceIdx = 0
+        durMs = 0L
+        posMs = 0L
         discovering = req.localPath == null
         error = null
         streams = emptyList()
@@ -929,6 +945,33 @@ fun PlayerScreen(
         }
     }
 
+    LaunchedEffect(page, req.item.id, relatedRefresh) {
+        if (page != "related" || relatedLoaded) return@LaunchedEffect
+        relatedLoading = true
+        relatedError = null
+        try {
+            val owner = req.ext ?: Store.ownerOf(req.item.id)
+            if (owner == null) {
+                relatedError = "No source is available for suggestions."
+            } else {
+                val fetched = withContext(Dispatchers.IO) {
+                    kotlinx.coroutines.withTimeoutOrNull(20_000L) {
+                        val cached = Session.sections.flatMap { it.items }
+                            .filter { Session.owner[it.id]?.id == owner.id }
+                        val feed = if (cached.isNotEmpty()) cached else owner.getHome().flatMap { it.items }
+                        feed.forEach { Session.owner[it.id] = owner }
+                        val genres = titleGenres.map { it.lowercase() }.toSet()
+                        feed.distinctBy { it.id }.filter { it.id != req.item.id && it.type == req.item.type }
+                            .sortedByDescending { item -> item.genres.count { it.lowercase() in genres } }
+                            .take(24)
+                    }
+                }
+                if (fetched == null) relatedError = "Suggestions timed out."
+                else { related = fetched; relatedLoaded = true }
+            }
+        } catch (cancel: CancellationException) { throw cancel } catch (t: Exception) { relatedError = t.message ?: "Suggestions unavailable" } finally { relatedLoading = false }
+    }
+
     val activeTracks = if (req.localPath != null ||
         (streamsFor == ep.id && streams.isNotEmpty() && error == null)) tracks else Tracks.EMPTY
     val drawerEpisodes = episodeWindow(shownEps, newestEpisodes, episodeRange)
@@ -963,11 +1006,19 @@ fun PlayerScreen(
     val epLabel = "E${ep.number.toInt()}" +
         (ep.title?.takeIf { it.isNotBlank() }?.let { " \u2022 $it" } ?: "")
 
+    val inPip = PlayerWindowState.inPip
+    val isMovie = req.item.type == dev.lynx.streamhub.api.MediaType.MOVIE
+    val queuePage = if (isMovie) "related" else "episodes"
+    val sidePanel = full && !inPip && (page == "episodes" || page == "related")
+    val canPip = android.os.Build.VERSION.SDK_INT >= 26 && context.packageManager.hasSystemFeature(
+        android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
     // ---------- UI ----------
     Box(Modifier.fillMaxSize().background(if (full) Color.Black else MaterialTheme.colorScheme.background)) {
     Column(Modifier.fillMaxSize()) {
     Box(
-        modifier = (if (full) Modifier.fillMaxSize()
+        modifier = (if (inPip) Modifier.fillMaxSize()
+            else if (full) Modifier.fillMaxHeight().fillMaxWidth(if (sidePanel) 0.58f else 1f)
             else Modifier.fillMaxWidth().statusBarsPadding().background(Color.Black).aspectRatio(16f / 9f)),
     ) {
         AndroidView(
@@ -989,11 +1040,11 @@ fun PlayerScreen(
         Box(
             Modifier
                 .fillMaxSize()
-                .pointerInput(locked) {
-                    detectTapGestures(
+                .pointerInput(locked, inPip, sidePanel) {
+                    if (!inPip) detectTapGestures(
                         onTap = {
                             controls = !controls
-                            page = ""
+                            if (!sidePanel) page = ""
                         },
                         onDoubleTap = { o ->
                             if (!locked) {
@@ -1004,8 +1055,8 @@ fun PlayerScreen(
                         },
                     )
                 }
-                .pointerInput(locked) {
-                    if (!locked) {
+                .pointerInput(locked, inPip) {
+                    if (!locked && !inPip) {
                         var leftSide = true
                         detectVerticalDragGestures(
                             onDragStart = { o ->
@@ -1023,127 +1074,115 @@ fun PlayerScreen(
 
         // controls
         FadeVis(
-            visible = controls && !locked && page.isEmpty(),
+            visible = controls && !locked && !inPip && (page.isEmpty() || sidePanel),
         ) {
             Box(Modifier.fillMaxSize().background(Color(0x55000000))) {
-                // top bar
-                Row(
-                    Modifier.fillMaxWidth().align(Alignment.TopStart).padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = { if (full) { full = false; orient = 1 } else onBack() }) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                // Icon-first top bar.
+                Row(Modifier.fillMaxWidth().align(Alignment.TopStart).padding(horizontal = 8.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { if (full) { full = false; orient = 1; page = "" } else onBack() }) {
+                        Icon(Icons.Outlined.KeyboardArrowDown, "Back / collapse", tint = Color.White)
                     }
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            req.item.title,
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            epLabel,
-                            color = Color(0xFFCCCCCC),
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Text(req.item.title, color = Color.White, fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(epLabel, color = Color.LightGray, fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    ChipBtn(if (full) "Exit" else "Full") {
-                        full = !full
-                        orient = if (full) 0 else 1
-                        poke++
+                    IconButton(onClick = { autoNext = !autoNext; PlayerPrefs.autoNext = autoNext }) {
+                        Icon(Icons.Outlined.PlayCircle, "Toggle auto next",
+                            tint = if (autoNext) Color.Black else Color.White,
+                            modifier = Modifier.clip(RoundedCornerShape(20.dp))
+                                .background(if (autoNext) Color.White else Color.Transparent).padding(3.dp))
                     }
-                    if (full) ChipBtn("Rotate") {
-                        orient = (orient + 1) % 3
-                        showHud(listOf("Landscape", "Portrait", "Auto rotate")[orient])
-                        poke++
+                    if (full) IconButton(onClick = { locked = true; controls = false }) {
+                        Icon(Icons.Outlined.Lock, "Lock controls", tint = Color.White)
                     }
-                    IconButton(onClick = {
-                        locked = true
-                        controls = false
-                    }) { Icon(Icons.Filled.Lock, contentDescription = "Lock", tint = Color.White) }
+                    IconButton(onClick = { page = "subs" }) {
+                        Icon(Icons.Outlined.ClosedCaption, "Subtitles", tint = if (textOn) Color.White else Color.LightGray)
+                    }
                     IconButton(onClick = { page = "main" }) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = Color.White)
+                        Icon(Icons.Outlined.Settings, "Settings", tint = Color.White)
                     }
                 }
 
-                // center
-                Row(
-                    Modifier.align(Alignment.Center),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(28.dp),
-                ) {
-                    RoundBtn(52.dp, { seekBy(-10_000L); poke++ }) {
-                        Text("-10", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                    RoundBtn(72.dp, {
-                        if (ended) exo.seekTo(0L)
-                        if (exo.isPlaying) exo.pause() else exo.play()
-                        poke++
-                    }) {
-                        if (isPlaying) PauseIcon()
-                        else Icon(
-                            Icons.Filled.PlayArrow,
-                            contentDescription = "Play",
-                            tint = Color.White,
-                            modifier = Modifier.size(42.dp),
-                        )
-                    }
-                    RoundBtn(52.dp, { seekBy(10_000L); poke++ }) {
-                        Text("+10", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                // bottom
-                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(fmt((scrub ?: posMs.toFloat()).toLong()), color = Color.White, fontSize = 12.sp)
-                        val maxV = durMs.coerceAtLeast(1L).toFloat()
-                        Slider(
-                            value = (scrub ?: posMs.toFloat()).coerceIn(0f, maxV),
-                            onValueChange = {
-                                scrub = it
-                                poke++
-                            },
-                            onValueChangeFinished = {
-                                scrub?.let {
-                                    exo.seekTo(it.toLong())
-                                    posMs = it.toLong()
-                                }
-                                scrub = null
-                            },
-                            valueRange = 0f..maxV,
-                            colors = SliderDefaults.colors(
-                                thumbColor = Accent,
-                                activeTrackColor = Accent,
-                                inactiveTrackColor = Color(0x55FFFFFF),
-                            ),
-                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                        )
-                        Text(fmt(durMs), color = Color.White, fontSize = 12.sp)
-                    }
-                    if (full) Row(Modifier.horizontalScroll(rememberScrollState())) {
-                        if (prevEp != null) ChipBtn("Prev") { switchTo(prevEp) }
-                        if (nextEp != null) ChipBtn("Next") { switchTo(nextEp) }
-                        ChipBtn("Skip +85s") { seekBy(85_000L); showHud("+85s"); poke++ }
-                        ChipBtn(if (speed == 1f) "Speed" else "${speed}x") { page = "speed" }
-                        ChipBtn("Audio") { page = "audio" }
-                        ChipBtn(if (textOn) "Subs \u2713" else "Subs") { page = "subs" }
-                        if (episodes.isNotEmpty()) ChipBtn("Episodes") { page = "episodes" }
-                        ChipBtn(listOf("Fit", "Fill", "Zoom")[when (resize) {
-                            AspectRatioFrameLayout.RESIZE_MODE_FILL -> 1
-                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> 2
-                            else -> 0
-                        }]) {
-                            resize = when (resize) {
-                                AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                                AspectRatioFrameLayout.RESIZE_MODE_FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            }
-                            PlayerPrefs.resize = resize
+                if (!buffering && (streams.isNotEmpty() || req.localPath != null)) {
+                    Row(Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(26.dp)) {
+                        RoundBtn(48.dp, { if (prevEp != null) switchTo(prevEp) else seekBy(-10_000L); poke++ }) {
+                            Icon(if (prevEp != null) Icons.Outlined.SkipPrevious else Icons.Outlined.Replay10,
+                                if (prevEp != null) "Previous episode" else "Back ten seconds", tint = Color.White)
+                        }
+                        RoundBtn(68.dp, {
+                            if (ended) exo.seekTo(0L)
+                            if (exo.isPlaying) exo.pause() else exo.play()
                             poke++
+                        }) {
+                            Icon(if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                                if (isPlaying) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(42.dp))
+                        }
+                        RoundBtn(48.dp, { if (nextEp != null) switchTo(nextEp) else seekBy(10_000L); poke++ }) {
+                            Icon(if (nextEp != null) Icons.Outlined.SkipNext else Icons.Outlined.Forward10,
+                                if (nextEp != null) "Next episode" else "Forward ten seconds", tint = Color.White)
+                        }
+                    }
+                }
+
+                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 12.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${fmt((scrub ?: posMs.toFloat()).toLong())} / ${fmt(durMs)}",
+                            color = Color.White, fontSize = 12.sp,
+                            modifier = Modifier.clip(RoundedCornerShape(20.dp))
+                                .background(Color(0x99000000)).padding(horizontal = 10.dp, vertical = 6.dp))
+                        Spacer(Modifier.weight(1f))
+                        if (canPip) IconButton(onClick = {
+                            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                                val entered = runCatching {
+                                    activity?.enterPictureInPictureMode(android.app.PictureInPictureParams.Builder()
+                                        .setAspectRatio(android.util.Rational(16, 9)).build()) == true
+                                }.getOrDefault(false)
+                                if (entered) { controls = false; page = "" }
+                                else showHud("Picture-in-picture is unavailable")
+                            }
+                        }) { Icon(Icons.Outlined.PictureInPictureAlt, "Picture in picture", tint = Color.White) }
+                        IconButton(onClick = {
+                            resize = if (resize == AspectRatioFrameLayout.RESIZE_MODE_FIT)
+                                AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            PlayerPrefs.resize = resize; poke++
+                        }) { Icon(Icons.Outlined.AspectRatio, "Toggle video fit / zoom", tint = Color.White) }
+                        IconButton(onClick = {
+                            full = !full; orient = if (full) 0 else 1
+                            if (!full) page = ""
+                            poke++
+                        }) { Icon(if (full) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen,
+                            if (full) "Exit fullscreen" else "Fullscreen", tint = Color.White) }
+                    }
+                    val maxV = durMs.coerceAtLeast(1L).toFloat()
+                    Slider(value = (scrub ?: posMs.toFloat()).coerceIn(0f, maxV),
+                        onValueChange = { scrub = it; poke++ },
+                        onValueChangeFinished = {
+                            scrub?.let { exo.seekTo(it.toLong()); posMs = it.toLong() }; scrub = null
+                        }, valueRange = 0f..maxV,
+                        colors = SliderDefaults.colors(thumbColor = Color(0xFFFF1744),
+                            activeTrackColor = Color(0xFFFF1744), inactiveTrackColor = Color(0x66FFFFFF)),
+                        modifier = Modifier.fillMaxWidth().height(26.dp))
+                    if (full) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = {
+                            reaction = if (reaction == 1) 0 else 1; AppPrefs.setReaction(req.item.id, reaction)
+                        }) { Icon(Icons.Outlined.ThumbUp, "Like locally", tint = if (reaction == 1) Color(0xFFFF1744) else Color.White) }
+                        IconButton(onClick = {
+                            reaction = if (reaction == -1) 0 else -1; AppPrefs.setReaction(req.item.id, reaction)
+                        }) { Icon(Icons.Outlined.ThumbDown, "Dislike locally", tint = if (reaction == -1) Color(0xFFFF1744) else Color.White) }
+                        IconButton(onClick = { page = "speed" }) {
+                            Icon(Icons.Outlined.Speed, "Playback speed", tint = Color.White)
+                        }
+                        Spacer(Modifier.weight(1f))
+                        IconButton(onClick = {
+                            orient = (orient + 1) % 3; poke++
+                        }) { Icon(Icons.Outlined.ScreenRotation, "Rotate", tint = Color.White) }
+                        IconButton(onClick = { page = if (page == queuePage) "" else queuePage; controls = true }) {
+                            Icon(if (isMovie) Icons.Outlined.VideoLibrary else Icons.Outlined.PlaylistPlay,
+                                if (isMovie) "Related movies" else "Episodes", tint = Color.White)
                         }
                     }
                 }
@@ -1184,7 +1223,7 @@ fun PlayerScreen(
             }) { Icon(Icons.Filled.Lock, contentDescription = "Unlock", tint = Accent) }
         }
 
-        if ((buffering || (streams.isEmpty() && req.localPath == null)) && error == null) {
+        if (!inPip && (buffering || (streams.isEmpty() && req.localPath == null)) && error == null) {
             Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(color = Color.White)
                 if (srcInfo.isNotEmpty() && req.localPath == null) {
@@ -1241,7 +1280,7 @@ fun PlayerScreen(
         }
 
         }
-        if (!full) {
+        if (!full && !inPip) {
             WatchInfo(
                 modifier = Modifier.weight(1f),
                 media = req.item,
@@ -1253,6 +1292,7 @@ fun PlayerScreen(
                 audioLabel = currentAudioLabel,
                 serverLabel = providerName,
                 qualityLabel = qualityLabel,
+                loading = req.localPath == null && durMs <= 0L && error == null,
                 subsOn = textOn,
                 speedLabel = if (speed == 1f) "Speed" else "${speed}x",
                 onPage = { page = it },
@@ -1272,22 +1312,23 @@ fun PlayerScreen(
         }
 
         // settings panel
-        if (page.isNotEmpty()) {
+        if (page.isNotEmpty() && !inPip) {
             val none = remember { MutableInteractionSource() }
             Box(
                 Modifier
                     .fillMaxSize()
-                    .clickable(interactionSource = none, indication = null) { page = "" },
+                    .then(if (sidePanel) Modifier else Modifier.clickable(
+                        interactionSource = none, indication = null) { page = "" }),
             ) {
                 Surface(
-                    color = MaterialTheme.colorScheme.surface,
+                    color = MaterialTheme.colorScheme.surfaceContainer,
                     contentColor = MaterialTheme.colorScheme.onSurface,
                     // SH_PATCH_03_SHEET_THEME
                     shape = if (full) RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp) else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                    modifier = (if (full) Modifier.align(Alignment.CenterEnd).fillMaxHeight()
-                            .fillMaxWidth(if (page == "episodes") 0.48f else 0.6f)
-                            .widthIn(max = if (page == "episodes") 520.dp else 360.dp)
+                    modifier = (if (sidePanel) Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.42f)
+                        else if (full) Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.6f).widthIn(max = 360.dp)
                         else Modifier.align(Alignment.BottomCenter).navigationBarsPadding().fillMaxWidth().fillMaxHeight(0.6f))
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp))
                         .pointerInput(Unit) { detectTapGestures { } },
                 ) {
                     Column(Modifier.fillMaxSize()) {
@@ -1309,6 +1350,7 @@ fun PlayerScreen(
                                     "speed" -> "Playback speed"
                                     "source" -> "Source"
                                     "episodes" -> "Episodes"
+                                    "related" -> "More like this"
                                     "substyle" -> "Subtitle style"
                                     "output" -> "Audio output"
                                     else -> "Settings"
@@ -1337,6 +1379,9 @@ fun PlayerScreen(
                         LazyColumn(Modifier.fillMaxSize(), state = listState) {
                             when (page) {
                                 "main" -> {
+                                    item { OptionRow(if (isMovie) "Related movies" else "Episodes") {
+                                        full = true; orient = 0; page = queuePage; controls = true
+                                    } }
                                     item {
                                         OptionRow("Quality", qualityLabel) { page = "quality" }
                                     }
@@ -1559,6 +1604,22 @@ fun PlayerScreen(
                                         "Return there to open a title from another source.",
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(20.dp)) }
+                                }
+
+                                "related" -> {
+                                    if (relatedLoading) {
+                                        items(4) { LoadingEpisodeCard() }
+                                    } else if (related.isEmpty()) {
+                                        item { Text(relatedError ?: "No suggestions returned by this source.",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(20.dp)) }
+                                        item { OptionRow("Retry") { relatedLoaded = false; relatedRefresh++ } }
+                                    } else {
+                                        items(related, key = { it.id }) { item ->
+                                            RelatedWatchCard(item,
+                                                item.genres.any { genre -> titleGenres.any { it.equals(genre, true) } }) { onOpen(item) }
+                                        }
+                                    }
                                 }
 
                                 "episodes" -> {

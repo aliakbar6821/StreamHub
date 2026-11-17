@@ -38,6 +38,14 @@ import androidx.compose.ui.unit.sp
 import dev.lynx.streamhub.api.MediaItem
 
 class MainActivity : ComponentActivity() {
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        PlayerWindowState.inPip = isInPictureInPictureMode
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

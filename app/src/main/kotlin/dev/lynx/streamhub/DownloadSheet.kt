@@ -46,13 +46,18 @@ fun DownloadSheet(
     var warnings by remember(ep.id) { mutableStateOf<List<String>>(emptyList()) }
     var language by remember(ep.id) { mutableStateOf(audioLanguageCode(AppPrefs.audio(media.id)).orEmpty()) }
     var selectedHeight by remember(ep.id) { mutableStateOf<Int?>(null) }
-    var manualLanguage by remember(ep.id) { mutableStateOf(false) }
+    var refresh by remember(ep.id) { mutableIntStateOf(0) }
+    var initialized by remember(ep.id) { mutableStateOf(false) }
+    var qualityChosen by remember(ep.id) { mutableStateOf(false) }
+    var availableHeights by remember(ep.id) { mutableStateOf<List<Int?>>(emptyList()) }
     var sd by remember { mutableStateOf(false) }
     val hasSd = remember { context.getExternalFilesDirs("downloads").let { it.size > 1 && it[1] != null } }
     val busy = searching || preparing > 0
 
-    LaunchedEffect(ep.id, ext?.id, initialStreams.map { it.url }) {
+    LaunchedEffect(ep.id, ext?.id, refresh) {
         searching = true
+        options = emptyList()
+        warnings = emptyList()
         val seen = HashSet<String>()
         val discovered = mutableListOf<Stream>()
         fun accept(stream: Stream) {
@@ -73,7 +78,7 @@ fun DownloadSheet(
             }
         }
         try {
-            val cached = initialStreams.ifEmpty {
+            val cached = if (refresh > 0) emptyList() else initialStreams.ifEmpty {
                 ext?.id?.let { StreamChoiceCache.get(it, ep.id) }.orEmpty()
             }
             if (cached.isNotEmpty()) {
@@ -93,20 +98,31 @@ fun DownloadSheet(
         } catch (cancel: CancellationException) { throw cancel } catch (t: Exception) { warnings = warnings + (t.message ?: "Source lookup failed") } finally { searching = false }
     }
 
-    val languages = options.map { streamChoice(it) }.distinctBy { it.audioKey }
-    LaunchedEffect(options.map { it.url }) {
-        val wanted = audioLanguageCode(AppPrefs.audio(media.id))
-        if (!manualLanguage && wanted != null && languages.any { it.audioKey == wanted }) {
-            language = wanted
-        } else if (languages.none { it.audioKey == language }) {
-            language = languages.firstOrNull()?.audioKey.orEmpty()
+    val currentHeights = options.map { streamChoice(it).height }.distinct()
+        .sortedWith(compareByDescending<Int?> { it ?: -1 })
+    LaunchedEffect(busy, options) {
+        if (!busy && options.isNotEmpty()) {
+            availableHeights = (availableHeights + currentHeights).distinct()
+                .sortedWith(compareByDescending<Int?> { it ?: -1 })
+            if (!qualityChosen) {
+                selectedHeight = currentHeights.firstOrNull()
+                qualityChosen = true
+            }
         }
     }
-    val candidates = options.filter { streamChoice(it).audioKey == language }
-    val heights = candidates.mapNotNull { streamChoice(it).height }.distinct().sortedDescending()
-    val pickedIndex = bestStreamIndex(options, language, selectedHeight)
-    val picked = pickedIndex?.let { options[it] }
-    val pickedHeight = picked?.let { streamChoice(it).height }
+    val exactOptions = if (qualityChosen) downloadChoicesAtHeight(options, selectedHeight) else emptyList()
+    val languages = exactOptions.map { streamChoice(it) }.distinctBy { it.audioKey }
+    LaunchedEffect(busy, qualityChosen, options) {
+        if (!busy && qualityChosen && !initialized && languages.isNotEmpty()) {
+            val wanted = audioLanguageCode(AppPrefs.audio(media.id))
+            language = languages.firstOrNull { it.audioKey == wanted }?.audioKey
+                ?: languages.first().audioKey
+            initialized = true
+        }
+    }
+    val picked = if (busy || !initialized) null else
+        exactOptions.firstOrNull { streamChoice(it).audioKey == language }
+
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -130,26 +146,38 @@ fun DownloadSheet(
                     Text(if (preparing > 0) "Reading available download qualities…" else "Loading audio and quality options…")
                 }
             }
-            if (options.isNotEmpty()) {
-                Text("Audio", style = MaterialTheme.typography.titleMedium,
+            if (options.isNotEmpty() || availableHeights.isNotEmpty()) {
+                Text("Quality", style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(top = 12.dp, bottom = 8.dp))
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    languages.forEach { choice ->
-                        PillChip(choice.audioLabel, language == choice.audioKey) {
-                            manualLanguage = true
-                            language = choice.audioKey
-                            selectedHeight = null
+                    availableHeights.forEach { height ->
+                        PillChip(height?.let { "${it}p" } ?: "Original file", qualityChosen && selectedHeight == height) {
+                            if (!busy && (!qualityChosen || selectedHeight != height)) {
+                                selectedHeight = height
+                                qualityChosen = true
+                                // Clear stale choices immediately; the provider is queried again.
+                                options = emptyList()
+                                searching = true
+                                refresh++
+                            }
                         }
                     }
                 }
-                Text("Quality", style = MaterialTheme.typography.titleMedium,
+                Text("Audio at " + (selectedHeight?.let { "${it}p" } ?: "original quality"),
+                    style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (heights.isEmpty()) {
-                        PillChip("Original file", true) {}
-                    } else heights.forEach { height ->
-                        PillChip("${height}p", pickedHeight == height) { selectedHeight = height }
+                if (!busy) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    languages.forEach { choice ->
+                        PillChip(choice.audioLabel, initialized && language == choice.audioKey) {
+                            language = choice.audioKey
+                            initialized = true
+                        }
                     }
+                }
+                if (!busy && qualityChosen && picked == null) {
+                    Text("The selected audio is unavailable at this quality. Choose an available language or another quality.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 10.dp))
                 }
                 Text("Downloads keep the selected file's embedded tracks. External subtitle files are not bundled. " +
                     "Multi-track audio is not remuxed into a single language.",
@@ -159,6 +187,11 @@ fun DownloadSheet(
             } else if (!busy) {
                 Text("No supported download option returned for this episode.",
                     color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 12.dp))
+            }
+            if (!busy) {
+                TextButton(onClick = { options = emptyList(); searching = true; refresh++ }) {
+                    Text("Refresh source options")
+                }
             }
             warnings.forEach { warning ->
                 Text(warning, color = MaterialTheme.colorScheme.onSurfaceVariant,

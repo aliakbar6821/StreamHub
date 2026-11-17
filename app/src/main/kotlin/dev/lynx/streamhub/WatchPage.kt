@@ -74,7 +74,12 @@ fun WatchInfo(
         onEpisode: (Episode) -> Unit,
     onOpen: (MediaItem) -> Unit = {},
     qualityLabel: String = "Auto",
+    loading: Boolean = false,
 ) {
+    if (loading) {
+        PlayerPageSkeleton(modifier, ep.title?.takeIf { it.isNotBlank() } ?: media.title)
+        return
+    }
     val sv = MaterialTheme.colorScheme.surfaceVariant
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
         val isMovie = media.type == MediaType.MOVIE
@@ -410,7 +415,7 @@ fun FadeVis(
  * as an episode thumbnail, and no views or dates are fabricated.
  */
 @Composable
-private fun RelatedWatchCard(
+internal fun RelatedWatchCard(
     item: MediaItem,
     sharesGenres: Boolean,
     onClick: () -> Unit,
