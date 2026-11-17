@@ -55,7 +55,7 @@ object Downloader {
     fun enqueue(context: Context, item: MediaItem, ep: Episode, s: Stream, label: String = "", sd: Boolean = false): Boolean {
         if (Store.hasDownload(ep.id)) return false
         val app = context.applicationContext
-        val hls = s.url.contains("m3u8", ignoreCase = true)
+        val hls = isHls(s)
         val ext = if (hls) "ts" else s.url.substringBefore('?').substringAfterLast('.', "mp4").lowercase()
             .let { if (it.length in 2..4 && it.all { ch -> ch.isLetterOrDigit() }) it else "mp4" }
         val name = "${item.id.hashCode()}_${ep.id.hashCode()}.$ext".replace(Regex("[^A-Za-z0-9._-]"), "_")

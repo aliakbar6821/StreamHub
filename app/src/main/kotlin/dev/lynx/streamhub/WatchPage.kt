@@ -73,6 +73,7 @@ fun WatchInfo(
     onPage: (String) -> Unit,
         onEpisode: (Episode) -> Unit,
     onOpen: (MediaItem) -> Unit = {},
+    qualityLabel: String = "Auto",
 ) {
     val sv = MaterialTheme.colorScheme.surfaceVariant
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
@@ -219,7 +220,14 @@ fun WatchInfo(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 PillChip("Audio: ${audioLabel.substringBefore(" · ").take(28)}", false) { onPage("audio") }
-                PillChip(serverLabel.take(30), false) { onPage("source") }
+                Text(
+                    "Source: ${serverLabel.take(24)}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clip(RoundedCornerShape(20.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                PillChip("Quality: $qualityLabel", false) { onPage("quality") }
                 PillChip(if (subsOn) "Subtitles \u2713" else "Subtitles", false) { onPage("subs") }
                 PillChip(speedLabel, false) { onPage("speed") }
                 PillChip("Settings", false) { onPage("main") }

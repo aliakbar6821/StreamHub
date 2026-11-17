@@ -101,7 +101,7 @@ fun PlayerSettingsScreen(onBack: () -> Unit) {
             IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") }
             Text("Player settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
-        Text("Language & Server", style = MaterialTheme.typography.titleLarge,
+        Text("Language & Source", style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 15.dp))
         PreferencePicker(Icons.Filled.Mic, "Default audio language",
             "For new titles. Choices made in the player are saved per title. Available tracks depend on the source.",
@@ -109,10 +109,15 @@ fun PlayerSettingsScreen(onBack: () -> Unit) {
         PreferencePicker(Icons.Filled.ClosedCaption, "Default subtitle language",
             "For new titles. Player choices are saved per title.",
             sub, listOf("Off" to "off") + LANGS) { sub = it; PlayerPrefs.subLang = it }
-        PreferencePicker(Icons.Filled.Storage, "Default server",
-            "Auto uses an available server. This list contains server labels previously returned by your sources.",
-            AppPrefs.defaultServer, listOf("Auto" to "") + AppPrefs.knownServers.map { it to it }) {
-            AppPrefs.defaultServer = it; AppPrefs.save()
+        Row(Modifier.fillMaxWidth().padding(vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Storage, null, modifier = Modifier.size(26.dp))
+            Spacer(Modifier.width(18.dp))
+            Column {
+                Text("Source", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text("Chosen when opening a title from Home or Search. Audio and quality are selected inside that source.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp))
+            }
         }
         Text("Playback", style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))

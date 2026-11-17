@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 
 val NavBg = Color(0xFF16161D)
 
@@ -25,7 +26,7 @@ fun StreamHubTheme(content: @Composable () -> Unit) {
         "light" -> false
         else -> isSystemInDarkTheme()
     }
-    val scheme = if (dark) darkColorScheme(
+    val baseScheme = if (dark) darkColorScheme(
         primary = Color.White, onPrimary = Color.Black,
         primaryContainer = Color(0xFF33312F), onPrimaryContainer = Color.White,
         secondary = Color(0xFF66BB6A),
@@ -42,6 +43,32 @@ fun StreamHubTheme(content: @Composable () -> Unit) {
         surfaceVariant = Color(0xFFEFEFEF), onSurfaceVariant = Color(0xFF5F5F66),
         outline = Color(0xFFBDBDC4), error = Color(0xFFB3261E),
     )
+    val popup = if (dark) Color(0xFF211F1D) else Color.White
+    val muted = if (dark) Color(0xFF33312F) else Color(0xFFF0F0F0)
+    val fg = if (dark) Color.White else Color.Black
+    val scheme = baseScheme.copy(
+        surfaceTint = Color.Transparent,
+        outline = if (dark) Color(0xFF666666) else Color(0xFFBDBDBD),
+        outlineVariant = if (dark) Color(0xFF444444) else Color(0xFFDDDDDD),
+        inversePrimary = if (dark) Color.Black else Color.White,
+        surfaceContainerLowest = if (dark) Color.Black else Color.White,
+        surfaceContainerLow = popup,
+        surfaceContainer = popup,
+        surfaceContainerHigh = popup,
+        surfaceContainerHighest = muted,
+        surfaceBright = popup,
+        surfaceDim = muted,
+        inverseSurface = fg,
+        inverseOnSurface = if (dark) Color.Black else Color.White,
+        secondary = fg,
+        onSecondary = if (dark) Color.Black else Color.White,
+        secondaryContainer = muted,
+        onSecondaryContainer = fg,
+        tertiary = fg,
+        onTertiary = if (dark) Color.Black else Color.White,
+        tertiaryContainer = muted,
+        onTertiaryContainer = fg,
+    )
     val view = androidx.compose.ui.platform.LocalView.current
     androidx.compose.runtime.SideEffect {
         val activity = view.context as? android.app.Activity
@@ -54,7 +81,16 @@ fun StreamHubTheme(content: @Composable () -> Unit) {
     val base = LocalDensity.current
     // Only density is scaled: text size = sp * density * fontScale, so this shrinks dp and sp together.
     CompositionLocalProvider(LocalDensity provides Density(base.density * UiScale.value, base.fontScale)) {
-        MaterialTheme(colorScheme = scheme) {
+        MaterialTheme(
+            colorScheme = scheme,
+            shapes = Shapes(
+                extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                small = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                medium = androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
+                large = androidx.compose.foundation.shape.RoundedCornerShape(26.dp),
+                extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
+            ),
+        ) {
             CompositionLocalProvider(
                 LocalContentColor provides scheme.onBackground
             ) {

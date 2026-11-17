@@ -214,6 +214,7 @@ private fun OptionRow(
     title: String,
     value: String? = null,
     selected: Boolean = false,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     // SH_PATCH_02_OPTION_ROW
@@ -224,7 +225,7 @@ private fun OptionRow(
         "Quality" -> Icons.Filled.Tune
         "Audio track" -> Icons.Filled.Mic
         "Subtitles" -> Icons.Filled.ClosedCaption
-        "Server" -> Icons.Filled.Storage
+        "Source" -> Icons.Filled.Storage
         "Download" -> Icons.Filled.Download
         "Playback speed" -> Icons.Filled.Speed
         "Audio output" -> Icons.Filled.Headphones
@@ -238,7 +239,7 @@ private fun OptionRow(
             .padding(horizontal = 12.dp, vertical = 3.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(if (selected) colors.primary else Color.Transparent)
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 17.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -337,7 +338,9 @@ fun PlayerScreen(
     var newestEpisodes by remember(req.item.id) { mutableStateOf(false) }
     var episodeRange by remember(req.item.id) { mutableIntStateOf(0) }
     var scrub by remember { mutableStateOf<Float?>(null) }
-    var preferredServerFound by remember(ep.id, reloadKey) { mutableStateOf(false) }
+    var preferredAudioApplied by remember(ep.id, reloadKey) { mutableStateOf(false) }
+    var discovering by remember { mutableStateOf(false) }
+    var failedSourceUrls by remember(ep.id, reloadKey) { mutableStateOf<Set<String>>(emptySet()) }
 
     val http = remember {
         DefaultHttpDataSource.Factory()
@@ -448,6 +451,66 @@ fun PlayerScreen(
         else tweak { it.setMaxVideoSize(Int.MAX_VALUE, h) }
     }
 
+    fun pickVariant(index: Int, requestedHeight: Int? = null) {
+        if (index !in streams.indices) return
+        preferredAudioApplied = true
+        failedSourceUrls = emptySet()
+        if (sourceIdx != index) {
+            pendingStart = exo.currentPosition.coerceAtLeast(0L)
+            tracks = Tracks.EMPTY
+            sourceIdx = index
+        }
+        qualityH = requestedHeight ?: -1
+        tweak { it.clearVideoSizeConstraints() }
+        if (requestedHeight != null) setQuality(requestedHeight)
+        page = ""
+    }
+
+    fun pickLanguage(code: String) {
+        val current = streams.getOrNull(sourceIdx)?.let { streamChoice(it) }
+        val index = bestStreamIndex(streams, code, current?.height, current?.codec) ?: return
+        if (code != "original" && code.isNotBlank()) {
+            AppPrefs.setAudio(req.item.id, code)
+            tweak { it.setPreferredAudioLanguage(code) }
+        }
+        pickVariant(index)
+    }
+
+    fun pickResolution(height: Int) {
+        val current = streams.getOrNull(sourceIdx)?.let { streamChoice(it) }
+        val actual = trackOpts(tracks, C.TRACK_TYPE_VIDEO).map { it.height }.filter { it > 0 }.distinct()
+        val adaptive = actual.size > 1
+        if ((adaptive && (height < 0 || height in actual)) ||
+            (height in actual && current?.height == null)
+        ) {
+            setQuality(height)
+            page = ""
+            return
+        }
+        val language = current?.audioKey ?: ""
+        val index = bestStreamIndex(streams, language, if (height < 0) null else height, current?.codec)
+        if (index != null) pickVariant(index, height.takeIf { it > 0 })
+        else { setQuality(height); page = "" }
+    }
+
+    fun tryCompatibleVariant(): Boolean {
+        val current = streams.getOrNull(sourceIdx) ?: return false
+        failedSourceUrls = failedSourceUrls + current.url
+        val meta = streamChoice(current)
+        val remaining = streams.indices.filter {
+            streams[it].url !in failedSourceUrls && streamChoice(streams[it]).audioKey == meta.audioKey
+        }
+        val next = remaining.minByOrNull {
+            kotlin.math.abs((streamChoice(streams[it]).height ?: 0) - (meta.height ?: 0))
+        } ?: return false
+        pendingStart = exo.currentPosition.coerceAtLeast(0L)
+        tracks = Tracks.EMPTY
+        qualityH = -1
+        tweak { it.clearVideoSizeConstraints() }
+        sourceIdx = next
+        return true
+    }
+
     fun pickAudio(o: TrackOpt) {
         tweak {
             var b = it.setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
@@ -556,11 +619,10 @@ fun PlayerScreen(
                 if (parse && hlsIdx != sourceIdx && !u.contains("m3u8", true)) {
                     hlsIdx = sourceIdx
                     attempt++
-                } else if (sourceIdx + 1 < streams.size) {
-                    srcInfo = "Server ${sourceIdx + 1} failed. Trying next..."
-                    sourceIdx++
+                } else if (tryCompatibleVariant()) {
+                    srcInfo = "Trying another file for the same audio language…"
                 } else {
-                    error = "Playback failed. Tap Retry or pick another server."
+                    error = "Playback failed for this language/quality. Retry or choose another available option. " + m.take(180)
                 }
             }
         }
@@ -640,6 +702,7 @@ fun PlayerScreen(
                 .build()
         }
         sourceIdx = 0
+        discovering = req.localPath == null
         error = null
         streams = emptyList()
         remoteSubs = emptyList()
@@ -692,6 +755,7 @@ fun PlayerScreen(
             if (streams.isEmpty()) error = "Source lookup failed: " +
                 (t.message ?: t.javaClass.simpleName).take(240)
         } finally {
+            discovering = false
             ticker.cancel()
         }
     }
@@ -782,9 +846,8 @@ fun PlayerScreen(
             exo.playWhenReady = true
             if (lp == null) {
                 delay(30000)
-                if (exo.playbackState != Player.STATE_READY && sourceIdx + 1 < streams.size) {
-                    showHud("Source too slow, trying next")
-                    sourceIdx++
+                if (exo.playbackState != Player.STATE_READY && tryCompatibleVariant()) {
+                    showHud("Trying another file for the same audio language")
                 }
             }
         } catch (t: Throwable) {
@@ -849,16 +912,17 @@ fun PlayerScreen(
     }
     BackHandler(enabled = page.isNotEmpty()) { page = "" }
 
-    LaunchedEffect(streams.map { it.quality }, ep.id) {
-        val names = streams.mapNotNull { it.quality }
-        AppPrefs.recordServers(names)
-        val wanted = AppPrefs.server(req.item.id)
-        if (!preferredServerFound && wanted.isNotBlank()) {
-            val index = streams.indexOfFirst { it.quality == wanted }
-            if (index >= 0) {
-                preferredServerFound = true
+    LaunchedEffect(streams.map { it.url }, ep.id) {
+        val source = req.ext?.id
+        if (source != null && streamsFor == ep.id) StreamChoiceCache.put(source, ep.id, streams)
+        val wanted = audioLanguageCode(AppPrefs.audio(req.item.id))
+        if (!preferredAudioApplied && wanted != null) {
+            val index = bestStreamIndex(streams, wanted, null)
+            if (index != null) {
+                preferredAudioApplied = true
                 if (index != sourceIdx) {
                     pendingStart = exo.currentPosition.coerceAtLeast(0L)
+                    tracks = Tracks.EMPTY
                     sourceIdx = index
                 }
             }
@@ -871,7 +935,29 @@ fun PlayerScreen(
     val audioOpts = trackOpts(activeTracks, C.TRACK_TYPE_AUDIO)
     val textOpts = trackOpts(activeTracks, C.TRACK_TYPE_TEXT)
     val videoOpts = trackOpts(activeTracks, C.TRACK_TYPE_VIDEO)
-    val qualities = videoOpts.map { it.height }.filter { it > 0 }.distinct().sortedDescending()
+    val currentChoice = streams.getOrNull(sourceIdx)?.let { streamChoice(it) }
+    val providerName = if (req.localPath != null) "Downloaded file"
+        else providerDisplayName(req.ext?.name)
+    val externalAudio = streams.map { streamChoice(it) }.filter { it.language != null }
+        .distinctBy { it.audioKey }
+    val embeddedCodes = audioOpts.mapNotNull { audioLanguageCode(it.lang) }.toSet()
+    val externalRows = externalAudio.filter {
+        it.audioKey !in embeddedCodes && !(it.audioKey == currentChoice?.audioKey && audioOpts.size == 1)
+    }
+    val currentAudioLabel = audioOpts.firstOrNull { it.selected }?.let {
+        audioLanguageName(it.lang) ?: currentChoice?.takeIf { c -> c.language != null }?.audioLabel ?: it.label
+    } ?: currentChoice?.takeIf { it.language != null }?.audioLabel ?: "Not reported"
+    val adaptiveHeights = videoOpts.map { it.height }.filter { it > 0 }.distinct()
+    val externalHeights = streams.filter { streamChoice(it).audioKey == currentChoice?.audioKey.orEmpty() }
+        .mapNotNull { streamChoice(it).height }
+    val qualities = (adaptiveHeights + externalHeights).distinct().sortedDescending()
+    val qualityLabel = when {
+        qualityH > 0 -> "${qualityH}p"
+        adaptiveHeights.size > 1 -> "Auto"
+        currentChoice?.height != null -> "${currentChoice.height}p"
+        adaptiveHeights.size == 1 -> "${adaptiveHeights.first()}p"
+        else -> "Auto"
+    }
     val textOn = textOpts.any { it.selected }
 
     val epLabel = "E${ep.number.toInt()}" +
@@ -1130,12 +1216,8 @@ fun PlayerScreen(
                 TextButton(onClick = {
                     pendingStart = exo.currentPosition
                     error = null
-                    if (streams.isEmpty()) {
-                        reloadKey++
-                    } else {
-                        sourceIdx = if (sourceIdx + 1 < streams.size) sourceIdx + 1 else 0
-                        attempt++
-                    }
+                    failedSourceUrls = emptySet()
+                    if (req.localPath == null) reloadKey++ else attempt++
                 }) { Text("Retry", color = Accent) }
             }
         }
@@ -1168,10 +1250,9 @@ fun PlayerScreen(
                 ep = ep,
                 episodes = shownEps,
                 durMs = durMs,
-                audioLabel = audioOpts.firstOrNull { it.selected }?.label
-                    ?: "Not reported",
-                serverLabel = streams.getOrNull(sourceIdx)?.quality?.takeIf { it.isNotBlank() }
-                    ?: "Server",
+                audioLabel = currentAudioLabel,
+                serverLabel = providerName,
+                qualityLabel = qualityLabel,
                 subsOn = textOn,
                 speedLabel = if (speed == 1f) "Speed" else "${speed}x",
                 onPage = { page = it },
@@ -1187,7 +1268,7 @@ fun PlayerScreen(
             }
         }
         if (dlSheet) {
-            DownloadSheet(req.item, ep, req.ext ?: Store.ownerOf(req.item.id)) { dlSheet = false }
+            DownloadSheet(req.item, ep, req.ext ?: Store.ownerOf(req.item.id), initialStreams = streams) { dlSheet = false }
         }
 
         // settings panel
@@ -1257,13 +1338,12 @@ fun PlayerScreen(
                             when (page) {
                                 "main" -> {
                                     item {
-                                        OptionRow("Quality", if (qualityH < 0) "Auto" else "${qualityH}p") { page = "quality" }
+                                        OptionRow("Quality", qualityLabel) { page = "quality" }
                                     }
                                     item {
                                         OptionRow(
                                             "Audio track",
-                                            audioOpts.firstOrNull { it.selected }?.label
-                                                ?: "Not reported",
+                                            currentAudioLabel,
                                         ) { page = "audio" }
                                     }
                                     item {
@@ -1273,10 +1353,8 @@ fun PlayerScreen(
                                                 ?: if (textOpts.isEmpty()) "None in stream" else "Off",
                                         ) { page = "subs" }
                                     }
-                                    if (streams.isNotEmpty()) {
-                                        item {
-                                            OptionRow("Server", "Server ${sourceIdx + 1} of ${streams.size}") { page = "source" }
-                                        }
+                                    item {
+                                        OptionRow("Source", providerName, enabled = false) {}
                                     }
                                     item {
                                         val has = Store.hasDownload(ep.id)
@@ -1336,30 +1414,30 @@ fun PlayerScreen(
                                 }
 
                                 "audio" -> {
-                                    // SH_PATCH_03_AUDIO
-                                    if (audioOpts.isEmpty()) {
-                                        item {
-                                            Text(
-                                                "This source has not reported any supported " +
-                                                    "audio tracks yet.",
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(20.dp),
-                                            )
+                                    items(externalRows, key = { "file:" + it.audioKey }) { choice ->
+                                        OptionRow(choice.audioLabel,
+                                            selected = choice.audioKey == currentChoice?.audioKey) {
+                                            pickLanguage(choice.audioKey)
                                         }
                                     }
                                     items(audioOpts) { o ->
-                                        OptionRow(o.label, selected = o.selected) {
-                                            pickAudio(o)
-                                            page = ""
-                                        }
+                                        val label = audioLanguageName(o.lang)
+                                            ?: currentChoice?.takeIf { it.language != null && audioOpts.size == 1 }?.audioLabel
+                                            ?: o.label
+                                        OptionRow(label, selected = o.selected) { pickAudio(o); page = "" }
+                                    }
+                                    if (audioOpts.isEmpty() && externalRows.isEmpty()) {
+                                        item { Text("No audio language information reported yet.",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(20.dp)) }
+                                    }
+                                    if (discovering) {
+                                        item { Text("Finding more audio and quality options…",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(16.dp)) }
                                     }
                                     if (hasDubChoice) {
-                                        item {
-                                            OptionRow(
-                                                "Other source versions",
-                                                "Separate video sources",
-                                            ) { page = "versions" }
-                                        }
+                                        item { OptionRow("Other audio versions", "From this provider") { page = "versions" } }
                                     }
                                 }
 
@@ -1412,17 +1490,22 @@ fun PlayerScreen(
                                 }
 
                                 "quality" -> {
-                                    item { OptionRow("Auto", selected = qualityH < 0) { setQuality(-1) } }
-                                    if (qualities.isEmpty()) {
-                                        item {
-                                            Text(
-                                                "This stream has a single quality. Other servers may offer more.",
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(16.dp),
-                                            )
-                                        }
+                                    item { OptionRow("Auto", selected = qualityH < 0 && qualityLabel == "Auto") {
+                                        pickResolution(-1)
+                                    } }
+                                    items(qualities) { h ->
+                                        OptionRow("${h}p", selected = qualityLabel == "${h}p") { pickResolution(h) }
                                     }
-                                    items(qualities) { h -> OptionRow("${h}p", selected = qualityH == h) { setQuality(h) } }
+                                    if (qualities.isEmpty()) {
+                                        item { Text("No alternate resolutions reported yet.",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(16.dp)) }
+                                    }
+                                    if (discovering) {
+                                        item { Text("Finding more options in the background…",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(16.dp)) }
+                                    }
                                 }
 
                                 "output" -> {
@@ -1471,31 +1554,11 @@ fun PlayerScreen(
                                 }
 
                                 "source" -> {
-                                    val vis = streams.indices.filter { !mixedAudio || dubOf(streams[it]) == dubOn }
-                                    if (vis.isEmpty()) {
-                                        item {
-                                            Text("No playable servers returned. Retry or choose another source version.",
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(20.dp))
-                                        }
-                                        if (hasDubChoice) {
-                                            item { OptionRow("Other source versions") { page = "versions" } }
-                                        }
-                                    }
-                                    items(vis) { i ->
-                                        OptionRow(
-                                            streams.getOrNull(i)?.quality
-                                                ?.takeIf { it.isNotBlank() }
-                                                ?: "Server ${i + 1}",
-                                            selected = sourceIdx == i,
-                                        ) {
-                                            preferredServerFound = true
-                                            streams.getOrNull(i)?.quality?.let { AppPrefs.setServer(req.item.id, it) }
-                                            pendingStart = exo.currentPosition
-                                            sourceIdx = i
-                                            page = ""
-                                        }
-                                    }
+                                    item { OptionRow("Source", providerName, enabled = false) {} }
+                                    item { Text("This title stays with the source selected in Home or Search. " +
+                                        "Return there to open a title from another source.",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(20.dp)) }
                                 }
 
                                 "episodes" -> {
