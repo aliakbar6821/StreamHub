@@ -4,10 +4,6 @@ import android.content.Context
 import android.content.res.Resources
 
 abstract class Plugin : BasePlugin() {
-    companion object {
-        const val `$stable`: Int = 8
-    }
-
     open fun load(context: Context) {
         load()
     }
