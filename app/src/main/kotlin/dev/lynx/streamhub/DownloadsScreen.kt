@@ -37,6 +37,7 @@ object DlInfo {
         c.getSharedPreferences("dl_meta", Context.MODE_PRIVATE).getString(id.toString(), "") ?: ""
 
     fun bytes(c: Context, id: Long): Long {
+        if (id >= 1_000_000_000_000L) return Downloader.bytes(id)
         val dm = c.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         dm.query(DownloadManager.Query().setFilterById(id)).use {
             if (!it.moveToFirst()) return 0L

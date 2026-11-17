@@ -461,7 +461,7 @@ fun DetailsScreen(
                         Toast.makeText(context, "Finding sources for ${targets.size} episodes\u2026", Toast.LENGTH_SHORT).show()
                         for (e in targets) {
                             try {
-                                val s = withContext(Dispatchers.IO) { ext?.getStreams(e.id)?.firstOrNull { !isHls(it) } }
+                                val s = withContext(Dispatchers.IO) { ext?.getStreams(e.id)?.let { l -> l.firstOrNull { !isHls(it) } ?: l.firstOrNull() } }
                                 if (s != null && Downloader.enqueue(context, media, e, s, s.quality ?: "")) ok++
                             } catch (_: Throwable) {
                             }

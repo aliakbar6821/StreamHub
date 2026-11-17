@@ -97,7 +97,10 @@ import androidx.media3.ui.PlayerView
 import dev.lynx.streamhub.api.Episode
 import dev.lynx.streamhub.api.Stream
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
@@ -226,6 +229,10 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
     var sourceIdx by remember { mutableIntStateOf(0) }
     var streams by remember { mutableStateOf<List<Stream>>(emptyList()) }
     var streamsFor by remember { mutableStateOf("") }
+    var attempt by remember { mutableIntStateOf(0) }
+    var hlsIdx by remember { mutableIntStateOf(-1) }
+    var reloadKey by remember { mutableIntStateOf(0) }
+    var srcInfo by remember { mutableStateOf("") }
     var episodes by remember { mutableStateOf<List<Episode>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -252,7 +259,8 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
 
     val http = remember {
         DefaultHttpDataSource.Factory()
-            .setUserAgent("StreamHub/0.1")
+            .setUserAgent(Downloader.UA)
+            .setConnectTimeoutMs(20000)
             .setAllowCrossProtocolRedirects(true)
     }
     val exo = remember {
@@ -409,7 +417,19 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             }
             override fun onTracksChanged(t: Tracks) { tracks = t }
             override fun onPlayerError(e: PlaybackException) {
-                error = e.message ?: "Playback error"
+                val m = (e.errorCodeName + ": " + (e.message ?: "")).trim()
+                val u = streams.getOrNull(sourceIdx)?.url ?: ""
+                val parse = e.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
+                    e.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
+                if (parse && hlsIdx != sourceIdx && !u.contains("m3u8", true)) {
+                    hlsIdx = sourceIdx
+                    attempt++
+                } else if (sourceIdx + 1 < streams.size) {
+                    srcInfo = "Source ${sourceIdx + 1} failed ($m). Trying next..."
+                    sourceIdx++
+                } else {
+                    error = m
+                }
             }
         }
         exo.addListener(l)
@@ -464,7 +484,47 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(ep.id, sourceIdx) {
+    // 1) collect sources for this episode (first one arrives early, others keep coming)
+    LaunchedEffect(ep.id, reloadKey) {
+        streams = emptyList()
+        streamsFor = ep.id
+        hlsIdx = -1
+        if (req.localPath != null) return@LaunchedEffect
+        val e = req.ext
+        if (e == null) {
+            error = "Extension not found. Go back and reload."
+            return@LaunchedEffect
+        }
+        val t0 = System.currentTimeMillis()
+        val ticker = launch {
+            while (streams.isEmpty()) {
+                srcInfo = "Finding sources... ${(System.currentTimeMillis() - t0) / 1000}s"
+                delay(1000)
+            }
+        }
+        try {
+            if (e is CsExtension) {
+                val ch = Channel<Stream>(Channel.UNLIMITED)
+                launch {
+                    try { e.streamsLive(ep.id) { ch.trySend(it) } } finally { ch.close() }
+                }
+                for (s in ch) {
+                    if (streams.none { it.url == s.url }) streams = streams + s
+                }
+            } else {
+                streams = withContext(Dispatchers.IO) { e.getStreams(ep.id) }
+            }
+            if (streams.isEmpty()) error = "No sources found for this episode. Try another plugin."
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            if (streams.isEmpty()) error = t.message ?: "Failed to load sources"
+        } finally {
+            ticker.cancel()
+        }
+    }
+
+    // 2) play the selected source; fall back to the next one on error or stall
+    LaunchedEffect(ep.id, sourceIdx, attempt, streamsFor, streams.isEmpty()) {
         error = null
         try {
             val lp = req.localPath
@@ -472,20 +532,30 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                 val path = Store.downloads.firstOrNull { it.episodeId == ep.id }?.path ?: lp
                 exo.setMediaItem(M3Item.fromUri(Uri.fromFile(File(path))))
             } else {
-                val e = req.ext ?: throw IllegalStateException("Extension not found. Go back and reload.")
-                if (streamsFor != ep.id) {
-                    streams = withContext(Dispatchers.IO) { e.getStreams(ep.id) }
-                    streamsFor = ep.id
-                }
+                if (streamsFor != ep.id || streams.isEmpty()) return@LaunchedEffect
                 val s = streams.getOrNull(sourceIdx) ?: throw IllegalStateException("No streams found")
-                http.setDefaultRequestProperties(s.headers)
-                exo.setMediaItem(M3Item.fromUri(s.url))
+                val ua = s.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value
+                http.setUserAgent(ua ?: Downloader.UA)
+                http.setDefaultRequestProperties(s.headers.filterKeys { !it.equals("User-Agent", true) })
+                val b = M3Item.Builder().setUri(s.url)
+                if (hlsIdx == sourceIdx || s.url.contains("m3u8", true)) b.setMimeType(MimeTypes.APPLICATION_M3U8)
+                srcInfo = "Source ${sourceIdx + 1} of ${streams.size}" +
+                    (s.quality?.takeIf { it.isNotBlank() }?.let { " - $it" } ?: "")
+                exo.setMediaItem(b.build())
             }
             if (pendingStart > 5000L) exo.seekTo(pendingStart - 3000L)
             pendingStart = 0L
             exo.prepare()
             exo.playWhenReady = true
+            if (lp == null) {
+                delay(30000)
+                if (exo.playbackState != Player.STATE_READY && sourceIdx + 1 < streams.size) {
+                    showHud("Source too slow, trying next")
+                    sourceIdx++
+                }
+            }
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             error = t.message ?: "Playback failed"
         }
     }
@@ -732,8 +802,14 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             }) { Icon(Icons.Filled.Lock, contentDescription = "Unlock", tint = Accent) }
         }
 
-        if (buffering && error == null) {
-            CircularProgressIndicator(color = Color.White, modifier = Modifier.align(Alignment.Center))
+        if ((buffering || (streams.isEmpty() && req.localPath == null)) && error == null) {
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(color = Color.White)
+                if (srcInfo.isNotEmpty() && req.localPath == null) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(srcInfo, color = Color.White, fontSize = 13.sp)
+                }
+            }
         }
 
         hud?.let {
@@ -754,13 +830,14 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             ) {
                 Text(it, color = Color(0xFFFF6B6B))
                 TextButton(onClick = {
-                    val keep = exo.currentPosition
-                    pendingStart = keep
-                    streamsFor = ""
+                    pendingStart = exo.currentPosition
                     error = null
-                    sourceIdx = if (sourceIdx == 0 && streams.size > 1) 1 else 0
-                    // force effect re-run when the index didn't change
-                    ep = ep.copy()
+                    if (streams.isEmpty()) {
+                        reloadKey++
+                    } else {
+                        sourceIdx = if (sourceIdx + 1 < streams.size) sourceIdx + 1 else 0
+                        attempt++
+                    }
                 }) { Text("Retry", color = Accent) }
             }
         }

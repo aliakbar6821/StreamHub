@@ -74,13 +74,13 @@ fun DownloadSheet(media: MediaItem, ep: Episode, ext: Extension?, onDismiss: () 
                 for (s in ch) {
                     if (streams.none { it.url == s.url }) {
                         streams = streams + s
-                        if (pick < 0 && !isHls(s)) pick = streams.size - 1
+                        if (pick < 0) pick = streams.size - 1
                     }
                 }
             } else {
                 val s = withContext(Dispatchers.IO) { ext?.getStreams(ep.id) ?: emptyList() }
                 streams = s
-                pick = s.indexOfFirst { !isHls(it) }
+                pick = s.indexOfFirst { !isHls(it) }.let { if (it < 0 && s.isNotEmpty()) 0 else it }
             }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -112,7 +112,7 @@ fun DownloadSheet(media: MediaItem, ep: Episode, ext: Extension?, onDismiss: () 
                     streams.forEachIndexed { i, s ->
                         val hls = isHls(s)
                         val name = s.quality?.takeIf { it.isNotBlank() } ?: "Server ${i + 1}"
-                        ServerRow(name + if (hls) " \u00b7 HLS (not downloadable yet)" else "", pick == i, !hls) { pick = i }
+                        ServerRow(name + if (hls) " \u00b7 HLS" else "", pick == i, true) { pick = i }
                     }
                 }
                 if (searching) {
