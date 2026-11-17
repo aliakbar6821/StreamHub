@@ -30,6 +30,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -234,13 +238,17 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
     var reloadKey by remember { mutableIntStateOf(0) }
     var srcInfo by remember { mutableStateOf("") }
     var episodes by remember { mutableStateOf<List<Episode>>(emptyList()) }
+    var dubOn by remember { mutableStateOf(PlayerPrefs.preferDub) }
+    val dubList = (req.ext as? CsExtension)?.dubEpisodes(req.item.id) ?: emptyList()
+    val shownEps = if (dubOn && dubList.isNotEmpty()) dubList else episodes
+    var full by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     var controls by remember { mutableStateOf(true) }
     var locked by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf("") }
     var poke by remember { mutableIntStateOf(0) }
-    var orient by remember { mutableIntStateOf(0) }
+    var orient by remember { mutableIntStateOf(1) }
     var hud by remember { mutableStateOf<String?>(null) }
     var hudStamp by remember { mutableIntStateOf(0) }
 
@@ -309,6 +317,36 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
         page = ""
         error = null
         posMs = 0L
+    }
+
+    val dubOf = { s: Stream -> s.quality?.contains("dub", true) == true }
+    val mixedAudio = streams.any { dubOf(it) } && streams.any { !dubOf(it) }
+    val hasDubChoice = dubList.isNotEmpty() || mixedAudio
+
+    fun setDub(want: Boolean) {
+        if (want == dubOn) {
+            page = ""
+            return
+        }
+        val idx = shownEps.indexOfFirst { it.id == ep.id }
+        val pos = exo.currentPosition
+        dubOn = want
+        PlayerPrefs.preferDub = want
+        if (dubList.isNotEmpty()) {
+            val to = if (want) dubList else episodes
+            val target = to.getOrNull(if (idx >= 0) idx else 0)
+            if (target != null) {
+                switchTo(target)
+                pendingStart = pos
+            }
+        } else {
+            val i = streams.indexOfFirst { dubOf(it) == want }
+            if (i >= 0) {
+                pendingStart = pos
+                sourceIdx = i
+            }
+        }
+        page = ""
     }
 
     fun seekBy(d: Long) {
@@ -425,10 +463,10 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                     hlsIdx = sourceIdx
                     attempt++
                 } else if (sourceIdx + 1 < streams.size) {
-                    srcInfo = "Source ${sourceIdx + 1} failed ($m). Trying next..."
+                    srcInfo = "Server ${sourceIdx + 1} failed. Trying next..."
                     sourceIdx++
                 } else {
-                    error = m
+                    error = "Playback failed. Tap Retry or pick another server."
                 }
             }
         }
@@ -446,7 +484,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             val w = act.window
             val c = WindowCompat.getInsetsController(w, w.decorView)
             c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            c.hide(WindowInsetsCompat.Type.systemBars())
+            c.show(WindowInsetsCompat.Type.systemBars())
         }
         onDispose {
             if (act != null) {
@@ -457,6 +495,14 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                 lp.screenBrightness = -1f
                 w.attributes = lp
             }
+        }
+    }
+
+    LaunchedEffect(full) {
+        val act = activity
+        if (act != null) {
+            val ctl = WindowCompat.getInsetsController(act.window, act.window.decorView)
+            if (full) ctl.hide(WindowInsetsCompat.Type.systemBars()) else ctl.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -515,10 +561,10 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             } else {
                 streams = withContext(Dispatchers.IO) { e.getStreams(ep.id) }
             }
-            if (streams.isEmpty()) error = "No sources found for this episode.\n" + ((e as? CsExtension)?.lastError ?: "Try another plugin.")
+            if (streams.isEmpty()) error = "Couldn't find a source for this episode. Tap Retry or try another episode."
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
-            if (streams.isEmpty()) error = t.message ?: "Failed to load sources"
+            if (streams.isEmpty()) error = "Couldn't load sources. Tap Retry."
         } finally {
             ticker.cancel()
         }
@@ -557,7 +603,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
-            error = t.message ?: "Playback failed"
+            error = "Playback failed. Tap Retry."
         }
     }
 
@@ -589,9 +635,9 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
         }
     }
 
-    val curIdx = episodes.indexOfFirst { it.id == ep.id }
-    val prevEp = if (curIdx > 0) episodes[curIdx - 1] else null
-    val nextEp = if (curIdx >= 0 && curIdx < episodes.size - 1) episodes[curIdx + 1] else null
+    val curIdx = shownEps.indexOfFirst { it.id == ep.id }
+    val prevEp = if (curIdx > 0) shownEps[curIdx - 1] else null
+    val nextEp = if (curIdx >= 0 && curIdx < shownEps.size - 1) shownEps[curIdx + 1] else null
 
     LaunchedEffect(ended) {
         if (ended && autoNext && nextEp != null) {
@@ -600,6 +646,10 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
         }
     }
 
+    BackHandler(enabled = full && page.isEmpty()) {
+        full = false
+        orient = 1
+    }
     BackHandler(enabled = page.isNotEmpty()) { page = "" }
 
     val audioOpts = trackOpts(tracks, C.TRACK_TYPE_AUDIO)
@@ -612,7 +662,12 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
         (ep.title?.takeIf { it.isNotBlank() }?.let { " \u2022 $it" } ?: "")
 
     // ---------- UI ----------
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(Modifier.fillMaxSize().background(if (full) Color.Black else MaterialTheme.colorScheme.background)) {
+    Column(Modifier.fillMaxSize()) {
+    Box(
+        modifier = (if (full) Modifier.fillMaxSize()
+            else Modifier.fillMaxWidth().statusBarsPadding().background(Color.Black).aspectRatio(16f / 9f)),
+    ) {
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
@@ -676,7 +731,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                     Modifier.fillMaxWidth().align(Alignment.TopStart).padding(horizontal = 8.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { if (full) { full = false; orient = 1 } else onBack() }) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                     }
                     Column(Modifier.weight(1f)) {
@@ -695,7 +750,12 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    ChipBtn("Rotate") {
+                    ChipBtn(if (full) "Exit" else "Full") {
+                        full = !full
+                        orient = if (full) 0 else 1
+                        poke++
+                    }
+                    if (full) ChipBtn("Rotate") {
                         orient = (orient + 1) % 3
                         showHud(listOf("Landscape", "Portrait", "Auto rotate")[orient])
                         poke++
@@ -764,7 +824,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                         )
                         Text(fmt(durMs), color = Color.White, fontSize = 12.sp)
                     }
-                    Row(Modifier.horizontalScroll(rememberScrollState())) {
+                    if (full) Row(Modifier.horizontalScroll(rememberScrollState())) {
                         if (prevEp != null) ChipBtn("Prev") { switchTo(prevEp) }
                         if (nextEp != null) ChipBtn("Next") { switchTo(nextEp) }
                         ChipBtn("Skip +85s") { seekBy(85_000L); showHud("+85s"); poke++ }
@@ -861,6 +921,26 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             }
         }
 
+        }
+        if (!full) {
+            WatchInfo(
+                modifier = Modifier.weight(1f),
+                media = req.item,
+                extId = req.ext?.id ?: Store.extIdFor(req.item.id) ?: "",
+                ep = ep,
+                episodes = shownEps,
+                durMs = durMs,
+                audioLabel = if (hasDubChoice) (if (dubOn) "English" else "Native")
+                    else (audioOpts.firstOrNull { it.selected }?.label ?: "Default"),
+                serverLabel = if (streams.isEmpty()) "Server" else "Server ${sourceIdx + 1}",
+                subsOn = textOn,
+                speedLabel = if (speed == 1f) "Speed" else "${speed}x",
+                onPage = { page = it },
+                onEpisode = { switchTo(it) },
+            )
+        }
+        }
+
         // settings panel
         if (page.isNotEmpty()) {
             val none = remember { MutableInteractionSource() }
@@ -871,11 +951,9 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
             ) {
                 Surface(
                     color = PanelBg,
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .fillMaxHeight()
-                        .fillMaxWidth(0.6f)
-                        .widthIn(max = 360.dp)
+                    shape = if (full) RoundedCornerShape(0.dp) else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    modifier = (if (full) Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.6f).widthIn(max = 360.dp)
+                        else Modifier.align(Alignment.BottomCenter).navigationBarsPadding().fillMaxWidth().fillMaxHeight(0.6f))
                         .pointerInput(Unit) { detectTapGestures { } },
                 ) {
                     Column(Modifier.fillMaxSize()) {
@@ -975,7 +1053,11 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                 }
 
                                 "audio" -> {
-                                    if (audioOpts.isEmpty()) {
+                                    if (hasDubChoice) {
+                                        item { OptionRow("Native (Sub)", selected = !dubOn) { setDub(false) } }
+                                        item { OptionRow("English (Dub)", selected = dubOn) { setDub(true) } }
+                                    }
+                                    if (audioOpts.isEmpty() && !hasDubChoice) {
                                         item { Text("This stream has a single audio track.", color = Color(0xFFAAAAAA), modifier = Modifier.padding(16.dp)) }
                                     }
                                     items(audioOpts) { o -> OptionRow(o.label, selected = o.selected) { pickAudio(o) } }
@@ -1007,8 +1089,9 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                 }
 
                                 "source" -> {
-                                    items(streams.size) { i ->
-                                        OptionRow("Source ${i + 1}", value = streams.getOrNull(i)?.quality?.takeIf { it.isNotBlank() }, selected = sourceIdx == i) {
+                                    val vis = streams.indices.filter { !mixedAudio || dubOf(streams[it]) == dubOn }
+                                    items(vis) { i ->
+                                        OptionRow("Server ${i + 1}", value = streams.getOrNull(i)?.quality?.takeIf { it.isNotBlank() }, selected = sourceIdx == i) {
                                             pendingStart = exo.currentPosition
                                             sourceIdx = i
                                             page = ""
@@ -1017,7 +1100,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                 }
 
                                 "episodes" -> {
-                                    items(episodes) { e ->
+                                    items(shownEps) { e ->
                                         OptionRow(
                                             "${e.number.toInt()}. ${e.title?.takeIf { it.isNotBlank() } ?: "Episode ${e.number.toInt()}"}",
                                             value = if (Store.isWatched(e.id)) "Watched" else null,

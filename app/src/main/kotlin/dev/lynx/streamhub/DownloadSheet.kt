@@ -107,7 +107,7 @@ fun DownloadSheet(media: MediaItem, ep: Episode, ext: Extension?, onDismiss: () 
                     Text("Finding sources\u2026 ${secs}s")
                 }
             } else if (streams.isEmpty()) {
-                Text(err ?: (ext as? CsExtension)?.lastError ?: "This source returned no links for this one. Try another episode or plugin.", color = MaterialTheme.colorScheme.error)
+                Text("Couldn't find links for this episode. Try another one.", color = MaterialTheme.colorScheme.error)
             } else {
                 val dubOf = { x: Stream -> x.quality?.contains("dub", true) == true }
                 val hasBoth = streams.any { dubOf(it) } && streams.any { !dubOf(it) }

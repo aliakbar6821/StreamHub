@@ -273,18 +273,6 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
                         }
                     }
                 }
-                error?.let {
-                    item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
-                }
-                if (report.isNotEmpty()) {
-                    item {
-                        Text(
-                            "Providers searched:\n" + report,
-                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                        )
-                    }
-                }
                 val shown = Session.results.filter { Safety.allowed(it) }
                 if (!loading && shown.isEmpty()) {
                     item { Text("No results", modifier = Modifier.padding(20.dp), fontSize = 18.sp) }

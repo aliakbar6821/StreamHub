@@ -376,10 +376,6 @@ fun DetailsScreen(
                         StatCard((ani?.year ?: info?.year ?: media.year)?.toString() ?: "\u2014", "Year", Modifier.weight(1f))
                     }
                 }
-                val note = (ext as? CsExtension)?.audioNote(media.id).orEmpty()
-                if (note.isNotEmpty()) item {
-                    Text(note, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-                }
                 val at = ani?.nextAt
                 if (at != null && at > System.currentTimeMillis()) item { AiringCard(ani?.nextEp, at) }
                 val genres = listOf(ani?.genres, info?.genres, media.genres).firstOrNull { !it.isNullOrEmpty() } ?: emptyList()
@@ -396,12 +392,6 @@ fun DetailsScreen(
             1 -> {
                 item {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (hasDub) {
-                            PillChip("Sub", !dub) { dub = false; PlayerPrefs.preferDub = false; range = 0 }
-                            Spacer(Modifier.width(8.dp))
-                            PillChip("Dub", dub) { dub = true; PlayerPrefs.preferDub = true; range = 0 }
-                            Spacer(Modifier.width(16.dp))
-                        }
                         if (!isMovie) {
                             PillChip("Oldest", !newest) { newest = false; range = 0 }
                             Spacer(Modifier.width(8.dp))
@@ -439,14 +429,14 @@ fun DetailsScreen(
             2 -> {
                 val order = ani?.order ?: emptyList()
                 if (order.isEmpty()) {
-                    item { AniEmpty(aniDone, "No watch order found for this title.", AniMeta.lastError) { aniTry++ } }
+                    item { AniEmpty(aniDone, "No watch order found for this title.", null) { aniTry++ } }
                 }
                 itemsIndexed(order) { i, r -> OrderRow(i + 1, r, r.image == ani?.cover) }
             }
             else -> {
                 val sim = ani?.similar ?: emptyList()
                 if (sim.isEmpty()) {
-                    item { AniEmpty(aniDone, "No recommendations found.", AniMeta.lastError) { aniTry++ } }
+                    item { AniEmpty(aniDone, "No recommendations found.", null) { aniTry++ } }
                 }
                 items(sim.chunked(2)) { row ->
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
