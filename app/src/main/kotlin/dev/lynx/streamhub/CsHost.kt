@@ -171,10 +171,16 @@ class CsExtension(private val api: MainAPI) : Extension {
     }
 
     override suspend fun search(query: String, page: Int): List<MediaItem> = withContext(Dispatchers.IO) {
+        var err: String? = null
         val res = withTimeoutOrNull(12_000L) {
-            runCatching { api.search(query) }.getOrNull()
-                ?: runCatching { api.search(query, page)?.items }.getOrNull()
-                ?: runCatching { api.quickSearch(query) }.getOrNull()
+            runCatching { api.search(query) }.onFailure { err = describe(it) }.getOrNull()
+                ?: runCatching { api.search(query, page)?.items }.onFailure { err = describe(it) }.getOrNull()
+                ?: runCatching { api.quickSearch(query) }.onFailure { err = describe(it) }.getOrNull()
+        }
+        lastSearchNote = when {
+            res == null && err == null -> "timed out"
+            res.isNullOrEmpty() -> err ?: "no results"
+            else -> res.size.toString()
         }
         (res ?: emptyList()).map { it.toItem() }
     }
@@ -234,6 +240,9 @@ class CsExtension(private val api: MainAPI) : Extension {
 
     /** Why the last streamsLive() call produced nothing (shown in the player and the download sheet). */
     @Volatile var lastError: String? = null
+
+    /** Result of the last search(): a count, or why it returned nothing. */
+    @Volatile var lastSearchNote: String = ""
 
     private fun describe(t: Throwable): String {
         var r: Throwable = t

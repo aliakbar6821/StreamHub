@@ -108,6 +108,7 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
     val requester = remember { FocusRequester() }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var report by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         if (!Session.searched) runCatching { requester.requestFocus() }
@@ -132,6 +133,8 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
                 val exts = Session.extensions
                 val acc = mutableListOf<MediaItem>()
                 val errs = mutableListOf<String>()
+                val rep = mutableListOf<String>()
+                report = ""
                 coroutineScope {
                     exts.map { e ->
                         async(Dispatchers.IO) {
@@ -141,9 +144,12 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
                                 synchronized(acc) {
                                     acc.addAll(r)
                                     Session.results = acc.toList()
+                                    rep.add(e.name + ": " + (if (r.isEmpty()) ((e as? CsExtension)?.lastSearchNote?.ifEmpty { null } ?: "no results") else r.size.toString()))
+                                    report = rep.joinToString("\n")
                                 }
                             } catch (t: Throwable) {
                                 synchronized(errs) { errs.add("${e.name}: ${t.message}") }
+                                synchronized(rep) { rep.add(e.name + ": error " + (t.message ?: "")); report = rep.joinToString("\n") }
                             }
                         }
                     }.awaitAll()
@@ -270,6 +276,15 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
                 error?.let {
                     item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
                 }
+                if (report.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Providers searched:\n" + report,
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                        )
+                    }
+                }
                 val shown = Session.results.filter { Safety.allowed(it) }
                 if (!loading && shown.isEmpty()) {
                     item { Text("No results", modifier = Modifier.padding(20.dp), fontSize = 18.sp) }
@@ -330,6 +345,7 @@ private fun ResultCard(item: MediaItem, onOpen: (MediaItem) -> Unit) {
                 if (item.status == MediaStatus.AIRING) Tag("Airing", color = Color(0xFF2E9E4F))
                 item.rating?.let { RatingTag(it) }
                 Tag(typeLabel(item.type))
+                Session.owner[item.id]?.name?.let { Tag(it, dark = false) }
                 item.year?.let { Tag(it.toString(), dark = false) }
             }
         }
