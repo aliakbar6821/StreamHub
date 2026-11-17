@@ -12,7 +12,13 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class RepoExt(val name: String, val pkg: String, val version: Long, val apk: String)
+data class RepoExt(
+    val name: String,
+    val pkg: String,
+    val version: Long,
+    val apk: String,
+    val sha256: String? = null,
+)
 
 object Repos {
     private fun get(url: String): String {
@@ -30,7 +36,11 @@ object Repos {
     private fun cs3(arr: JSONArray): List<RepoExt> = (0 until arr.length()).mapNotNull { i ->
         val o = arr.optJSONObject(i) ?: return@mapNotNull null
         val internal = o.optString("internalName", o.optString("name"))
-        RepoExt(o.optString("name", internal), "cs3:$internal", o.optLong("version", 1L), o.optString("url"))
+        if (o.optInt("status", 1) == 0) return@mapNotNull null
+        RepoExt(o.optString("name", internal), "cs3:$internal", o.optLong("version", 1L), o.optString("url"),
+            o.optString("fileHash").removePrefix("sha256-").takeIf {
+                it.matches(Regex("[a-fA-F0-9]{64}"))
+            })
     }
 
     suspend fun fetch(url: String): List<RepoExt> = withContext(Dispatchers.IO) {

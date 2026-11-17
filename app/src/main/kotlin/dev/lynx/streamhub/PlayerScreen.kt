@@ -337,6 +337,7 @@ fun PlayerScreen(
     var newestEpisodes by remember(req.item.id) { mutableStateOf(false) }
     var episodeRange by remember(req.item.id) { mutableIntStateOf(0) }
     var scrub by remember { mutableStateOf<Float?>(null) }
+    var preferredServerFound by remember(ep.id, reloadKey) { mutableStateOf(false) }
 
     val http = remember {
         DefaultHttpDataSource.Factory()
@@ -350,10 +351,9 @@ fun PlayerScreen(
             .build()
             .also { p ->
                 var tp = p.trackSelectionParameters.buildUpon()
-                if (PlayerPrefs.audioLang.isNotEmpty()) {
-                    tp = tp.setPreferredAudioLanguage(PlayerPrefs.audioLang)
-                }
-                val sl = PlayerPrefs.subLang
+                val audio = AppPrefs.audio(req.item.id)
+                if (audio.isNotEmpty()) tp = tp.setPreferredAudioLanguage(audio)
+                val sl = AppPrefs.subtitle(req.item.id)
                 if (sl == "off") {
                     tp = tp.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                 } else if (sl.isNotEmpty()) {
@@ -458,7 +458,7 @@ fun PlayerScreen(
             if (!o.lang.isNullOrBlank()) b = b.setPreferredAudioLanguage(o.lang)
             b
         }
-        PlayerPrefs.audioLang = o.lang ?: ""
+        AppPrefs.setAudio(req.item.id, o.lang ?: "")
         showHud("Audio: ${o.label}")
     }
 
@@ -468,7 +468,7 @@ fun PlayerScreen(
                 it.clearOverridesOfType(C.TRACK_TYPE_TEXT)
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             }
-            PlayerPrefs.subLang = "off"
+            AppPrefs.setSubtitle(req.item.id, "off")
             showHud("Subtitles off")
         } else {
             tweak {
@@ -479,7 +479,7 @@ fun PlayerScreen(
                 if (!o.lang.isNullOrBlank()) b = b.setPreferredTextLanguage(o.lang)
                 b
             }
-            PlayerPrefs.subLang = o.lang ?: ""
+            AppPrefs.setSubtitle(req.item.id, o.lang ?: "")
             showHud("Subtitles: ${o.label}")
         }
     }
@@ -848,6 +848,22 @@ fun PlayerScreen(
         orient = 1
     }
     BackHandler(enabled = page.isNotEmpty()) { page = "" }
+
+    LaunchedEffect(streams.map { it.quality }, ep.id) {
+        val names = streams.mapNotNull { it.quality }
+        AppPrefs.recordServers(names)
+        val wanted = AppPrefs.server(req.item.id)
+        if (!preferredServerFound && wanted.isNotBlank()) {
+            val index = streams.indexOfFirst { it.quality == wanted }
+            if (index >= 0) {
+                preferredServerFound = true
+                if (index != sourceIdx) {
+                    pendingStart = exo.currentPosition.coerceAtLeast(0L)
+                    sourceIdx = index
+                }
+            }
+        }
+    }
 
     val activeTracks = if (req.localPath != null ||
         (streamsFor == ep.id && streams.isNotEmpty() && error == null)) tracks else Tracks.EMPTY
@@ -1306,7 +1322,7 @@ fun PlayerScreen(
                                 "substyle" -> {
                                     item {
                                         SubtitleStyleEditor(
-                                            dark = androidx.compose.foundation.isSystemInDarkTheme(),
+                                            dark = AppPrefs.appearance == "dark" || (AppPrefs.appearance == "system" && androidx.compose.foundation.isSystemInDarkTheme()),
                                             font = subFont,
                                             bold = subBold,
                                             scale = subScale,
@@ -1473,6 +1489,8 @@ fun PlayerScreen(
                                                 ?: "Server ${i + 1}",
                                             selected = sourceIdx == i,
                                         ) {
+                                            preferredServerFound = true
+                                            streams.getOrNull(i)?.quality?.let { AppPrefs.setServer(req.item.id, it) }
                                             pendingStart = exo.currentPosition
                                             sourceIdx = i
                                             page = ""

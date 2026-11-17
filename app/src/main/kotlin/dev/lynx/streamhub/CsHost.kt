@@ -45,6 +45,7 @@ import dev.lynx.streamhub.api.Stream as ShStream
 object CsHost {
     private const val TAG = "CsHost"
     private val loaded = HashSet<String>()
+    @Volatile private var lastLoadError: String? = null
     @Volatile private var fired = false
     private val adapters = java.util.IdentityHashMap<MainAPI, CsExtension>()
     private val installLock = kotlinx.coroutines.sync.Mutex()
@@ -105,6 +106,21 @@ object CsHost {
                     require(expected < 0 || total == expected) { "Incomplete plugin download" }
                 } finally { con.disconnect() }
                 progress("Checking ${e.name}…")
+                e.sha256?.let { expected ->
+                    val digest = java.security.MessageDigest.getInstance("SHA-256")
+                    temporary.inputStream().use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            digest.update(buffer, 0, n)
+                        }
+                    }
+                    val actual = digest.digest().joinToString("") {
+                        "%02x".format(it.toInt() and 255)
+                    }
+                    require(actual.equals(expected, true)) { "Plugin checksum mismatch; download rejected" }
+                }
                 java.util.zip.ZipFile(temporary).use { zip ->
                     val manifest = zip.getEntry("manifest.json")
                         ?: error("Not a CloudStream plugin: missing manifest")
@@ -121,7 +137,7 @@ object CsHost {
                     require(target.setReadOnly()) { "Cannot protect plugin code" }
                     if (!alreadyLoaded) {
                         progress("Loading ${e.name}…")
-                        require(loadPlugin(app, target)) { "Plugin could not be loaded; check device logs" }
+                        require(loadPlugin(app, target)) { "Plugin could not be loaded: ${lastLoadError ?: "check device logs"}" }
                     }
                     prefs(app).edit().putLong(k, e.version).apply()
                     previous.delete()
@@ -146,6 +162,7 @@ object CsHost {
     @Synchronized
     private fun loadPlugin(c: Context, f: File): Boolean {
         if (loaded.contains(f.absolutePath)) return true
+        lastLoadError = null
         return try {
             if (f.canWrite()) f.setReadOnly()
             val loader = PathClassLoader(f.absolutePath, c.classLoader)
@@ -166,6 +183,7 @@ object CsHost {
             loaded.add(f.absolutePath)
             true
         } catch (t: Throwable) {
+            lastLoadError = (t.javaClass.simpleName + ": " + (t.message ?: "unknown error")).take(400)
             Log.w(TAG, "load failed ${f.name}: ${t.message}", t)
             false
         }
@@ -185,7 +203,11 @@ object CsHost {
             }
         }
         return APIHolder.allProviders
-            .filter { it.sourcePlugin != null && !it.supportedTypes.contains(TvType.NSFW) }
+            .filter { provider ->
+                val source = provider.sourcePlugin
+                source != null && !provider.supportedTypes.contains(TvType.NSFW) &&
+                    (if (source in DefaultSources.ids) AppPrefs.defaultsEnabled else AppPrefs.extraExtensions)
+            }
             .map { api -> adapters.getOrPut(api) { CsExtension(api) } }
     }
 }

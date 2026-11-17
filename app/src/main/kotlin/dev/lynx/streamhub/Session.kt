@@ -47,10 +47,11 @@ object Session {
         loading = true
         try {
             val app = context.applicationContext
+            val setupError = DefaultSources.ensure(app)
             val result = withContext(Dispatchers.IO) {
                 val exts = ExtensionLoader.loadAll(app)
                 val all = mutableListOf<HomeSection>()
-                var err: String? = null
+                var err: String? = setupError
                 val gate = Semaphore(3)
                 val feeds = coroutineScope {
                     exts.map { e -> async {

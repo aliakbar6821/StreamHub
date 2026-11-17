@@ -43,7 +43,12 @@ fun ExtensionsScreen() {
     var available by remember { mutableStateOf<Map<String, List<RepoExt>>>(emptyMap()) }
     var errors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
 
-    LaunchedEffect(Store.repos.toList(), refresh) {
+    LaunchedEffect(Store.repos.toList(), refresh, AppPrefs.extraExtensions) {
+        if (!AppPrefs.extraExtensions) {
+            available = emptyMap()
+            errors = emptyMap()
+            return@LaunchedEffect
+        }
         val ok = mutableMapOf<String, List<RepoExt>>()
         val bad = mutableMapOf<String, String>()
         for (r in Store.repos.toList()) {
@@ -63,7 +68,36 @@ fun ExtensionsScreen() {
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
-        Text("You", style = MaterialTheme.typography.headlineMedium)
+        Text("Sources & extensions", style = MaterialTheme.typography.headlineMedium)
+        Text("Default sources", style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
+        Text("MovieBox · movies and series\nAnilight · anime",
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("On first use, StreamHub downloads executable plugins from the configured Phisher repository. " +
+            "Internet is required. Plugins are third-party code; availability and playback are not guaranteed.",
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 10.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Enable default sources", modifier = Modifier.weight(1f))
+            Switch(AppPrefs.defaultsEnabled, { enabled ->
+                AppPrefs.defaultsEnabled = enabled; AppPrefs.save()
+                scope.launch { Session.reload(context) }
+            })
+        }
+        AppPrefs.setupStatus.takeIf { it.isNotBlank() }?.let { Text(it) }
+        TextButton(onClick = { scope.launch { Session.reload(context) } }) {
+            Text(if (Session.loading) "Working…" else "Set up / reload default sources")
+        }
+        Text("Additional CloudStream extensions", style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(top = 20.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Enable repositories and extra extensions", modifier = Modifier.weight(1f))
+            Switch(AppPrefs.extraExtensions, { enabled ->
+                AppPrefs.extraExtensions = enabled; AppPrefs.save()
+                scope.launch { Session.reload(context) }
+            })
+        }
         Spacer(Modifier.height(16.dp))
 
         Column(
@@ -106,6 +140,7 @@ fun ExtensionsScreen() {
             Text("${e.name} (v${e.version})", modifier = Modifier.padding(vertical = 6.dp))
         }
 
+        if (AppPrefs.extraExtensions) {
         Spacer(Modifier.height(24.dp))
         Text("Repositories", style = MaterialTheme.typography.titleMedium)
         Text(
@@ -193,6 +228,7 @@ fun ExtensionsScreen() {
                     ) { Text(if (busy == e.pkg) "..." else label) }
                 }
             }
+        }
         }
         Spacer(Modifier.height(32.dp))
     }

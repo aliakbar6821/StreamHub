@@ -13,6 +13,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
@@ -39,6 +41,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        AppPrefs.init(this)
         Store.init(this)
         PlayerPrefs.init(this)
         UiScale.value = PlayerPrefs.uiScale
@@ -57,8 +60,8 @@ fun App() {
     val tabs = listOf(
         NavTab("Home", Icons.Filled.Home),
         NavTab("Schedule", Icons.Filled.DateRange),
-        NavTab("My List", Icons.Filled.Favorite),
-        NavTab("Downloads", Icons.Filled.KeyboardArrowDown),
+        NavTab("My List", Icons.Filled.VideoLibrary),
+        NavTab("Downloads", Icons.Filled.Download),
         NavTab("You", Icons.Filled.Person),
     )
     var selected by remember { mutableIntStateOf(0) }
@@ -112,7 +115,7 @@ fun App() {
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = primary,
                                 selectedTextColor = primary,
-                                indicatorColor = primary.copy(alpha = 0.18f),
+                                indicatorColor = primary.copy(alpha = 0.12f),
                             ),
                         )
                     }

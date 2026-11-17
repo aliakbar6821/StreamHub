@@ -44,7 +44,9 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
     val base = Session.sections
         .map { s -> HomeSection(s.title, s.items.filter { Safety.allowed(it) }) }
         .filter { it.items.isNotEmpty() }
-    val chips = listOf("All", "Movies", "Series") + base.map { it.title }.distinct()
+    val chips = listOf("All", "Movies", "Series", "Anime") +
+        base.flatMap { it.items }.flatMap { it.genres }.distinct().take(12) +
+        base.map { it.title }.distinct()
     val active = if (filter in chips) filter else "All"
     val sections = when (active) {
         "All" -> base
@@ -52,9 +54,13 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
             .map { s -> HomeSection(s.title, s.items.filter { it.type == MediaType.MOVIE }) }
             .filter { it.items.isNotEmpty() }
         "Series" -> base
-            .map { s -> HomeSection(s.title, s.items.filter { it.type != MediaType.MOVIE }) }
+            .map { s -> HomeSection(s.title, s.items.filter { it.type == MediaType.SERIES }) }
             .filter { it.items.isNotEmpty() }
-        else -> base.filter { it.title == active }
+        "Anime" -> base.map { s -> HomeSection(s.title, s.items.filter { it.type == MediaType.ANIME }) }
+            .filter { it.items.isNotEmpty() }
+        else -> base.map { s -> HomeSection(s.title,
+            if (s.title == active) s.items else s.items.filter { active in it.genres }) }
+            .filter { it.items.isNotEmpty() }
     }
     val hero = base.flatMap { it.items }.distinctBy { it.id }.take(5)
     val grid = active != "All"
@@ -90,13 +96,17 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
         if (Session.loading) {
             item {
                 Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Text(AppPrefs.setupStatus.ifBlank { "Loading your sources…" },
+                            modifier = Modifier.padding(top = 12.dp))
+                    }
                 }
             }
         } else if (Session.loaded && Session.extensions.isEmpty()) {
             item {
                 Text(
-                    "No extensions installed. Open You > Repositories to install one, then Reload extensions.",
+                    "No sources available. Open You > Sources & extensions to check default setup.",
                     modifier = Modifier.padding(16.dp),
                 )
             }

@@ -20,13 +20,18 @@ object UiScale {
 
 @Composable
 fun StreamHubTheme(content: @Composable () -> Unit) {
-    val scheme = if (isSystemInDarkTheme()) darkColorScheme(
+    val dark = when (AppPrefs.appearance) {
+        "dark" -> true
+        "light" -> false
+        else -> isSystemInDarkTheme()
+    }
+    val scheme = if (dark) darkColorScheme(
         primary = Color.White, onPrimary = Color.Black,
-        primaryContainer = Color(0xFF2E2E38), onPrimaryContainer = Color.White,
+        primaryContainer = Color(0xFF33312F), onPrimaryContainer = Color.White,
         secondary = Color(0xFF66BB6A),
-        background = Color(0xFF0F0F14), onBackground = Color(0xFFEDEDF2),
-        surface = Color(0xFF0F0F14), onSurface = Color(0xFFEDEDF2),
-        surfaceVariant = Color(0xFF23232C), onSurfaceVariant = Color(0xFFC9C9D3),
+        background = Color(0xFF000000), onBackground = Color(0xFFF5F5F5),
+        surface = Color(0xFF000000), onSurface = Color(0xFFF5F5F5),
+        surfaceVariant = Color(0xFF211F1D), onSurfaceVariant = Color(0xFFB8B8B8),
         outline = Color(0xFF55556A), error = Color(0xFFFF6B6B),
     ) else lightColorScheme(
         primary = Color.Black, onPrimary = Color.White,
@@ -37,6 +42,15 @@ fun StreamHubTheme(content: @Composable () -> Unit) {
         surfaceVariant = Color(0xFFEFEFEF), onSurfaceVariant = Color(0xFF5F5F66),
         outline = Color(0xFFBDBDC4), error = Color(0xFFB3261E),
     )
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.SideEffect {
+        val activity = view.context as? android.app.Activity
+        if (activity != null) {
+            val controller = androidx.core.view.WindowCompat.getInsetsController(activity.window, view)
+            controller.isAppearanceLightStatusBars = !dark
+            controller.isAppearanceLightNavigationBars = !dark
+        }
+    }
     val base = LocalDensity.current
     // Only density is scaled: text size = sp * density * fontScale, so this shrinks dp and sp together.
     CompositionLocalProvider(LocalDensity provides Density(base.density * UiScale.value, base.fontScale)) {

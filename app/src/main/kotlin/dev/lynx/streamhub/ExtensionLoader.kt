@@ -11,6 +11,7 @@ object ExtensionLoader {
     const val META_CLASS = "streamhub.extension.class"
 
     fun loadAll(context: Context): List<Extension> {
+        if (!AppPrefs.extraExtensions) return CsHost.extensions(context)
         val pm = context.packageManager
         val packages = if (Build.VERSION.SDK_INT >= 33) {
             pm.getInstalledPackages(
