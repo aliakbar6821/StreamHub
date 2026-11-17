@@ -215,6 +215,25 @@ class CsExtension(private val api: MainAPI) : Extension {
         )
     }
 
+    suspend fun streamsLive(episodeId: String, onStream: (ShStream) -> Unit) {
+        withContext(Dispatchers.IO) {
+            withTimeoutOrNull(90_000L) {
+                runCatching {
+                    api.loadLinks(episodeId, false, { }, { l ->
+                        if (l.url.isNotBlank()) {
+                            val ref: String? = l.referer
+                            val hs: Map<String, String>? = l.headers
+                            val h = HashMap<String, String>(hs.orEmpty())
+                            if (!ref.isNullOrBlank() && h.keys.none { it.equals("Referer", true) }) h["Referer"] = ref
+                            val q = if (l.quality > 0) l.quality.toString() + "p" else null
+                            onStream(ShStream(url = l.url, quality = listOfNotNull(l.name, q).joinToString(" "), headers = h))
+                        }
+                    })
+                }
+            }
+        }
+    }
+
     override suspend fun getStreams(episodeId: String): List<ShStream> = withContext(Dispatchers.IO) {
         val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
         val job = CoroutineScope(SupervisorJob() + Dispatchers.IO).async {
@@ -227,7 +246,7 @@ class CsExtension(private val api: MainAPI) : Extension {
             val t = System.currentTimeMillis()
             if (firstAt == 0L && links.isNotEmpty()) firstAt = t
             if (firstAt != 0L && t - firstAt > 5000) break
-            if (t - t0 > 25000) break
+            if (t - t0 > 60000) break
         }
         job.cancel()
         links.toList()

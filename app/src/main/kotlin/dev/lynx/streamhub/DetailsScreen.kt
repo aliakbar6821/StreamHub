@@ -60,6 +60,19 @@ private fun rangeLabel(l: List<Episode>): String =
     if (l.isEmpty()) "\u2014" else "${l.minOf { it.number }.toInt()}-${l.maxOf { it.number }.toInt()}"
 
 @Composable
+private fun AniEmpty(done: Boolean, none: String, err: String?, onRetry: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+        Text(if (!done) "Loading\u2026" else none, fontSize = 18.sp)
+        if (done) {
+            if (!err.isNullOrBlank()) {
+                Text(err, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            }
+            TextButton(onClick = onRetry) { Text("Retry") }
+        }
+    }
+}
+
+@Composable
 private fun InfoChip(text: String, dark: Boolean = true) {
     val bg = if (dark) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
     val fg = if (dark) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
@@ -233,6 +246,7 @@ fun DetailsScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var ani by remember { mutableStateOf<AniInfo?>(null) }
     var aniDone by remember { mutableStateOf(false) }
+    var aniTry by remember { mutableStateOf(0) }
     var expanded by remember { mutableStateOf(false) }
     var sheetEp by remember { mutableStateOf<Episode?>(null) }
     var tab by remember { mutableStateOf(0) }
@@ -254,7 +268,8 @@ fun DetailsScreen(
             error = t.message ?: "Failed to load"
         }
     }
-    LaunchedEffect(media.title) {
+    LaunchedEffect(media.title, aniTry) {
+        aniDone = false
         ani = AniMeta.fetch(media.title)
         aniDone = true
     }
@@ -291,13 +306,6 @@ fun DetailsScreen(
             Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 8.dp)) {
                 IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, contentDescription = "Back") }
             }
-        }
-        item {
-            AsyncImage(
-                model = ani?.banner ?: media.poster, contentDescription = null, contentScale = ContentScale.Crop,
-                modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(2.4f)
-                    .clip(RoundedCornerShape(26.dp)).background(sv),
-            )
         }
         item {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -418,14 +426,14 @@ fun DetailsScreen(
             2 -> {
                 val order = ani?.order ?: emptyList()
                 if (order.isEmpty()) {
-                    item { Text(if (!aniDone) "Loading\u2026" else "No watch order found for this title.", fontSize = 18.sp, modifier = Modifier.padding(16.dp)) }
+                    item { AniEmpty(aniDone, "No watch order found for this title.", AniMeta.lastError) { aniTry++ } }
                 }
                 itemsIndexed(order) { i, r -> OrderRow(i + 1, r, r.image == ani?.cover) }
             }
             else -> {
                 val sim = ani?.similar ?: emptyList()
                 if (sim.isEmpty()) {
-                    item { Text(if (!aniDone) "Loading\u2026" else "No recommendations found.", fontSize = 18.sp, modifier = Modifier.padding(16.dp)) }
+                    item { AniEmpty(aniDone, "No recommendations found.", AniMeta.lastError) { aniTry++ } }
                 }
                 items(sim.chunked(2)) { row ->
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {

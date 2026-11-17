@@ -17,7 +17,9 @@ import dev.lynx.streamhub.api.Extension
 import dev.lynx.streamhub.api.MediaItem
 import dev.lynx.streamhub.api.MediaType
 import dev.lynx.streamhub.api.Stream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -46,7 +48,8 @@ private fun ServerRow(label: String, selected: Boolean, enabled: Boolean, onClic
 @Composable
 fun DownloadSheet(media: MediaItem, ep: Episode, ext: Extension?, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    var streams by remember { mutableStateOf<List<Stream>?>(null) }
+    var streams by remember { mutableStateOf<List<Stream>>(emptyList()) }
+    var searching by remember { mutableStateOf(true) }
     var err by remember { mutableStateOf<String?>(null) }
     var pick by remember { mutableStateOf(-1) }
     var sd by remember { mutableStateOf(false) }
@@ -57,19 +60,36 @@ fun DownloadSheet(media: MediaItem, ep: Episode, ext: Extension?, onDismiss: () 
     }
 
     LaunchedEffect(ep.id) {
-        launch { while (streams == null) { delay(1000); secs++ } }
+        launch { while (searching) { delay(1000); secs++ } }
         try {
-            val s = withContext(Dispatchers.IO) { ext?.getStreams(ep.id) ?: emptyList() }
-            pick = s.indexOfFirst { !isHls(it) }
-            streams = s
+            if (ext is CsExtension) {
+                val ch = Channel<Stream>(Channel.UNLIMITED)
+                launch {
+                    try {
+                        ext.streamsLive(ep.id) { ch.trySend(it) }
+                    } finally {
+                        ch.close()
+                    }
+                }
+                for (s in ch) {
+                    if (streams.none { it.url == s.url }) {
+                        streams = streams + s
+                        if (pick < 0 && !isHls(s)) pick = streams.size - 1
+                    }
+                }
+            } else {
+                val s = withContext(Dispatchers.IO) { ext?.getStreams(ep.id) ?: emptyList() }
+                streams = s
+                pick = s.indexOfFirst { !isHls(it) }
+            }
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             err = t.message ?: "Failed to load sources"
-            streams = emptyList()
         }
+        searching = false
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        val list = streams
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
             Text(
                 "Download " + epLabel(media, ep.number),
@@ -79,18 +99,28 @@ fun DownloadSheet(media: MediaItem, ep: Episode, ext: Extension?, onDismiss: () 
             Spacer(Modifier.height(16.dp))
             Text("Server", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
-            when {
-                list == null -> Row(verticalAlignment = Alignment.CenterVertically) {
+            if (streams.isEmpty() && searching) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 3.dp)
                     Spacer(Modifier.width(12.dp))
                     Text("Finding sources\u2026 ${secs}s")
                 }
-                list.isEmpty() -> Text(err ?: "No sources found for this one.", color = MaterialTheme.colorScheme.error)
-                else -> Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
-                    list.forEachIndexed { i, s ->
+            } else if (streams.isEmpty()) {
+                Text(err ?: "This source returned no links for this one. Try another episode or plugin.", color = MaterialTheme.colorScheme.error)
+            } else {
+                Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                    streams.forEachIndexed { i, s ->
                         val hls = isHls(s)
                         val name = s.quality?.takeIf { it.isNotBlank() } ?: "Server ${i + 1}"
                         ServerRow(name + if (hls) " \u00b7 HLS (not downloadable yet)" else "", pick == i, !hls) { pick = i }
+                    }
+                }
+                if (searching) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Still searching\u2026 ${secs}s", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -110,7 +140,7 @@ fun DownloadSheet(media: MediaItem, ep: Episode, ext: Extension?, onDismiss: () 
                     modifier = Modifier.weight(1f).height(52.dp),
                     enabled = pick >= 0,
                     onClick = {
-                        val s = list?.getOrNull(pick)
+                        val s = streams.getOrNull(pick)
                         if (s != null) {
                             val ok = Downloader.enqueue(context, media, ep, s, s.quality ?: "", sd)
                             Toast.makeText(context, if (ok) "Download started" else "Already downloaded", Toast.LENGTH_SHORT).show()

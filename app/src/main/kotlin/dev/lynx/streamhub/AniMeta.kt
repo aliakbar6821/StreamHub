@@ -17,6 +17,7 @@ data class AniInfo(
 )
 
 object AniMeta {
+    @Volatile var lastError: String? = null
     private val cache = HashMap<String, AniInfo?>()
     private val MON = arrayOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
     private const val Q = "query(\$s:String){Media(search:\$s,type:ANIME){title{romaji english native} synonyms bannerImage coverImage{extraLarge large} averageScore episodes duration status format seasonYear genres studios(isMain:true){nodes{name}} startDate{year month day} endDate{year month day} nextAiringEpisode{episode airingAt} relations{edges{relationType node{type title{romaji english} coverImage{large extraLarge} format episodes duration seasonYear startDate{year month day} endDate{year month day}}}} recommendations(perPage:12,sort:RATING_DESC){nodes{mediaRecommendation{title{romaji english} coverImage{extraLarge large} format seasonYear}}}}}"
@@ -87,10 +88,29 @@ object AniMeta {
         return names.any { norm(it).contains(nq) }
     }
 
+    private fun clean(t: String): String = t
+        .replace(Regex("\\(.*?\\)"), "")
+        .replace(Regex("(?i)\\b(season|part|cour)\\s*\\d+\\b"), "")
+        .replace(Regex("\\s+"), " ").trim()
+
     suspend fun fetch(title: String): AniInfo? = withContext(Dispatchers.IO) {
-        synchronized(cache) { if (cache.containsKey(title)) return@withContext cache[title] }
-        val r = try { load(title) } catch (_: Throwable) { return@withContext null }
-        synchronized(cache) { cache[title] = r }
+        synchronized(cache) { cache[title] }?.let { return@withContext it }
+        var r: AniInfo? = null
+        for (t in listOf(title, clean(title)).filter { it.isNotBlank() }.distinct()) {
+            for (attempt in 0..1) {
+                try {
+                    r = load(t)
+                    break
+                } catch (e: Throwable) {
+                    lastError = (e.javaClass.simpleName + ": " + (e.message ?: "")).take(120)
+                }
+            }
+            if (r != null) break
+        }
+        if (r != null) {
+            lastError = null
+            synchronized(cache) { cache[title] = r }
+        }
         r
     }
 
@@ -98,21 +118,31 @@ object AniMeta {
         val con = URL("https://graphql.anilist.co").openConnection() as HttpURLConnection
         con.requestMethod = "POST"
         con.doOutput = true
-        con.connectTimeout = 15000
-        con.readTimeout = 20000
+        con.connectTimeout = 25000
+        con.readTimeout = 60000
         con.setRequestProperty("Content-Type", "application/json")
         con.setRequestProperty("Accept", "application/json")
         con.setRequestProperty("User-Agent", "StreamHub/0.1")
         val body = JSONObject().put("query", Q).put("variables", JSONObject().put("s", query))
         con.outputStream.use { it.write(body.toString().toByteArray()) }
         val text = try {
-            if (con.responseCode != 200) return null
+            if (con.responseCode != 200) {
+                lastError = "AniList HTTP " + con.responseCode
+                return null
+            }
             con.inputStream.bufferedReader().use { it.readText() }
         } finally {
             con.disconnect()
         }
-        val m = JSONObject(text).optJSONObject("data")?.optJSONObject("Media") ?: return null
-        if (!matches(query, m)) return null
+        val m = JSONObject(text).optJSONObject("data")?.optJSONObject("Media")
+        if (m == null) {
+            lastError = "AniList returned no result"
+            return null
+        }
+        if (!matches(query, m)) {
+            lastError = "No AniList match for \"" + query + "\""
+            return null
+        }
 
         val order = ArrayList<AniRel>()
         order.add(rel(m))
