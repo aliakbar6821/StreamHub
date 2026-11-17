@@ -376,6 +376,10 @@ fun DetailsScreen(
                         StatCard((ani?.year ?: info?.year ?: media.year)?.toString() ?: "\u2014", "Year", Modifier.weight(1f))
                     }
                 }
+                val note = (ext as? CsExtension)?.audioNote(media.id).orEmpty()
+                if (note.isNotEmpty()) item {
+                    Text(note, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                }
                 val at = ani?.nextAt
                 if (at != null && at > System.currentTimeMillis()) item { AiringCard(ani?.nextEp, at) }
                 val genres = listOf(ani?.genres, info?.genres, media.genres).firstOrNull { !it.isNullOrEmpty() } ?: emptyList()
