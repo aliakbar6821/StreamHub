@@ -144,7 +144,10 @@ private fun trackOpts(tracks: Tracks, type: Int): List<TrackOpt> {
         for (i in 0 until g.length) {
             if (!g.isTrackSupported(i)) continue
             val f = g.getTrackFormat(i)
-            val lab: String? = f.label
+            val lab: String? = f.label?.trim()?.takeUnless {
+                it.isBlank() ||
+                    Regex("(?i)track\\s*\\d+").matches(it)
+            }
             val name = langName(f.language)
             val label = when {
                 type == C.TRACK_TYPE_VIDEO ->
@@ -152,7 +155,17 @@ private fun trackOpts(tracks: Tracks, type: Int): List<TrackOpt> {
                 !lab.isNullOrBlank() && name != null && !lab.contains(name, true) -> "$name ($lab)"
                 !lab.isNullOrBlank() -> lab
                 name != null -> name
-                else -> "Track ${out.size + 1}"
+                else -> buildList {
+                    add(if (type == C.TRACK_TYPE_TEXT)
+                        "Unknown subtitle language"
+                    else "Unknown audio language")
+                    f.sampleMimeType?.substringAfter('/')?.let {
+                        add(it.uppercase(Locale.ROOT))
+                    }
+                    if (type == C.TRACK_TYPE_AUDIO && f.channelCount > 0) {
+                        add("${f.channelCount} ch")
+                    }
+                }.joinToString(" • ")
             }
             out.add(TrackOpt(label, g, i, g.isTrackSelected(i), f.language, f.height))
         }
@@ -967,7 +980,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                 ep = ep,
                 episodes = shownEps,
                 durMs = durMs,
-                audioLabel = if (hasDubChoice) (if (dubOn) "English" else "Native")
+                audioLabel = if (hasDubChoice) (if (dubOn) "Dubbed" else "Original")
                     else (audioOpts.firstOrNull { it.selected }?.label ?: "Default"),
                 serverLabel = if (streams.isEmpty()) "Server" else "Server ${sourceIdx + 1}",
                 subsOn = textOn,
@@ -1039,7 +1052,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                                     item {
                                         OptionRow(
                                             "Audio track",
-                                            if (hasDubChoice) (if (dubOn) "English" else "Native")
+                                            if (hasDubChoice) (if (dubOn) "Dubbed" else "Original")
                                             else audioOpts.firstOrNull { it.selected }?.label
                                                 ?: if (audioOpts.isEmpty()) "Single track" else "Default",
                                         ) { page = "audio" }
@@ -1112,8 +1125,8 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
 
                                 "audio" -> {
                                     if (hasDubChoice) {
-                                        item { OptionRow("Native (Sub)", selected = !dubOn) { setDub(false) } }
-                                        item { OptionRow("English (Dub)", selected = dubOn) { setDub(true) } }
+                                        item { OptionRow("Original source", selected = !dubOn) { setDub(false) } }
+                                        item { OptionRow("Dubbed source", selected = dubOn) { setDub(true) } }
                                     }
                                     if (audioOpts.isEmpty() && !hasDubChoice) {
                                         item { Text("This stream has a single audio track.", color = Color(0xFFAAAAAA), modifier = Modifier.padding(16.dp)) }

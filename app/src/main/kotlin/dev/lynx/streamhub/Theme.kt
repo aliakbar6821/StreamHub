@@ -40,6 +40,12 @@ fun StreamHubTheme(content: @Composable () -> Unit) {
     val base = LocalDensity.current
     // Only density is scaled: text size = sp * density * fontScale, so this shrinks dp and sp together.
     CompositionLocalProvider(LocalDensity provides Density(base.density * UiScale.value, base.fontScale)) {
-        MaterialTheme(colorScheme = scheme, content = content)
+        MaterialTheme(colorScheme = scheme) {
+            CompositionLocalProvider(
+                LocalContentColor provides scheme.onBackground
+            ) {
+                content()
+            }
+        }
     }
 }

@@ -97,6 +97,7 @@ fun WatchInfo(
             Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Text(
                     title,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 20.sp,
                     lineHeight = 26.sp,
                     fontWeight = FontWeight.Bold,
@@ -123,6 +124,7 @@ fun WatchInfo(
                 Column(Modifier.weight(1f)) {
                     Text(
                         media.title,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -159,6 +161,7 @@ fun WatchInfo(
             item {
                 Text(
                     "Episodes (${episodes.size})",
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -215,6 +218,7 @@ private fun WatchEpisodeRow(item: MediaItem, e: Episode, current: Boolean, onDow
         Column(Modifier.weight(1f)) {
             Text(
                 e.title?.takeIf { it.isNotBlank() } ?: "Episode ${e.number.toInt()}",
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 2,
@@ -226,7 +230,11 @@ private fun WatchEpisodeRow(item: MediaItem, e: Episode, current: Boolean, onDow
         }
         Box {
             IconButton(onClick = { menu = true }) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "More")
+                Icon(
+                    Icons.Filled.MoreVert,
+                    contentDescription = "More",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 val done = Store.isWatched(e.id)
