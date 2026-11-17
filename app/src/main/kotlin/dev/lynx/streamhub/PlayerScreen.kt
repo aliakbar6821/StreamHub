@@ -1008,7 +1008,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
 
                                 "source" -> {
                                     items(streams.size) { i ->
-                                        OptionRow("Source ${i + 1}", selected = sourceIdx == i) {
+                                        OptionRow("Source ${i + 1}", value = streams.getOrNull(i)?.quality?.takeIf { it.isNotBlank() }, selected = sourceIdx == i) {
                                             pendingStart = exo.currentPosition
                                             sourceIdx = i
                                             page = ""

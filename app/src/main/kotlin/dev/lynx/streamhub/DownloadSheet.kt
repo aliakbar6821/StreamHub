@@ -53,6 +53,7 @@ fun DownloadSheet(media: MediaItem, ep: Episode, ext: Extension?, onDismiss: () 
     var err by remember { mutableStateOf<String?>(null) }
     var pick by remember { mutableStateOf(-1) }
     var sd by remember { mutableStateOf(false) }
+    var audio by remember { mutableStateOf(if (PlayerPrefs.preferDub) "dub" else "sub") }
     var secs by remember { mutableStateOf(0) }
     val hasSd = remember {
         val d = context.getExternalFilesDirs("downloads")
@@ -108,8 +109,21 @@ fun DownloadSheet(media: MediaItem, ep: Episode, ext: Extension?, onDismiss: () 
             } else if (streams.isEmpty()) {
                 Text(err ?: (ext as? CsExtension)?.lastError ?: "This source returned no links for this one. Try another episode or plugin.", color = MaterialTheme.colorScheme.error)
             } else {
+                val dubOf = { x: Stream -> x.quality?.contains("dub", true) == true }
+                val hasBoth = streams.any { dubOf(it) } && streams.any { !dubOf(it) }
+                val visible = streams.withIndex().filter { !hasBoth || dubOf(it.value) == (audio == "dub") }
+                LaunchedEffect(audio, streams.size) {
+                    if (hasBoth && visible.none { it.index == pick }) pick = visible.firstOrNull()?.index ?: -1
+                }
+                if (hasBoth) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PillChip("Sub", audio == "sub") { audio = "sub"; PlayerPrefs.preferDub = false }
+                        PillChip("Dub", audio == "dub") { audio = "dub"; PlayerPrefs.preferDub = true }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
-                    streams.forEachIndexed { i, s ->
+                    visible.forEach { (i, s) ->
                         val hls = isHls(s)
                         val name = s.quality?.takeIf { it.isNotBlank() } ?: "Server ${i + 1}"
                         ServerRow(name + if (hls) " \u00b7 HLS" else "", pick == i, true) { pick = i }

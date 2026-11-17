@@ -142,6 +142,11 @@ class CsExtension(private val api: MainAPI) : Extension {
     override val name = api.name
     override val version = 1
 
+    private val dubs = java.util.concurrent.ConcurrentHashMap<String, List<ShEpisode>>()
+
+    /** Dubbed episodes for a title, or empty when the plugin has no separate dub list. */
+    fun dubEpisodes(id: String): List<ShEpisode> = dubs[id] ?: emptyList()
+
     private fun SearchResponse.toItem(): MediaItem {
         val t: TvType? = this.type
         return MediaItem(
@@ -177,11 +182,15 @@ class CsExtension(private val api: MainAPI) : Extension {
     override suspend fun getDetails(id: String): MediaDetails = withContext(Dispatchers.IO) {
         val url = id.split("|", limit = 3).getOrNull(2) ?: id
         val lr = withTimeoutOrNull(40_000L) { api.load(url) } ?: throw Exception("Could not load details")
+        var dubRaw: List<com.lagradost.cloudstream3.Episode> = emptyList()
         val eps: List<com.lagradost.cloudstream3.Episode> = when (lr) {
             is TvSeriesLoadResponse -> lr.episodes
-            is AnimeLoadResponse -> lr.episodes[DubStatus.Subbed]
-                ?: lr.episodes[DubStatus.Dubbed]
-                ?: lr.episodes.values.flatten()
+            is AnimeLoadResponse -> {
+                val sub = lr.episodes[DubStatus.Subbed]
+                val dub = lr.episodes[DubStatus.Dubbed]
+                if (!sub.isNullOrEmpty() && !dub.isNullOrEmpty() && sub.map { it.data } != dub.map { it.data }) dubRaw = dub
+                sub ?: dub ?: lr.episodes.values.flatten()
+            }
             else -> emptyList()
         }
         val episodes = when {
@@ -199,6 +208,14 @@ class CsExtension(private val api: MainAPI) : Extension {
             lr is MovieLoadResponse -> listOf(ShEpisode(lr.dataUrl, 1f, lr.name, lr.posterUrl))
             lr is LiveStreamLoadResponse -> listOf(ShEpisode(lr.dataUrl, 1f, lr.name, lr.posterUrl))
             else -> emptyList()
+        }
+        if (dubRaw.isNotEmpty()) {
+            dubs[id] = dubRaw.mapIndexed { i, e ->
+                val label = e.name?.takeIf { it.isNotBlank() } ?: ("Episode " + (e.episode ?: (i + 1)))
+                ShEpisode(id = e.data, number = (i + 1).toFloat(), title = label, thumbnail = e.posterUrl)
+            }
+        } else {
+            dubs.remove(id)
         }
         val t: TvType = lr.type
         MediaDetails(

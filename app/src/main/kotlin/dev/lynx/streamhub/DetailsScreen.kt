@@ -277,7 +277,10 @@ fun DetailsScreen(
     val info = details?.item
     val type = info?.type ?: media.type
     val isMovie = type == MediaType.MOVIE
-    val eps = details?.episodes ?: emptyList()
+    var dub by remember { mutableStateOf(PlayerPrefs.preferDub) }
+    val dubEps = (ext as? CsExtension)?.dubEpisodes(media.id) ?: emptyList()
+    val hasDub = dubEps.isNotEmpty()
+    val eps = (if (dub && hasDub) dubEps else details?.episodes) ?: emptyList()
     val ordered = if (newest) eps.reversed() else eps
     val chunks = ordered.chunked(100)
     val chunkIdx = range.coerceIn(0, (chunks.size - 1).coerceAtLeast(0))
@@ -290,7 +293,7 @@ fun DetailsScreen(
         ani?.score?.let { "$it% score" },
         if (isMovie) "Movie" else epCount?.let { "$it episodes" },
     ).joinToString(" \u2022 ")
-    val tabs = listOf("Home", "Episodes", "Watch Order", "More like this")
+    val tabs = listOf("Home", if (isMovie) "Movie" else "Episodes", "Watch Order", "More like this")
     val sv = MaterialTheme.colorScheme.surfaceVariant
 
     fun watch() {
@@ -389,6 +392,12 @@ fun DetailsScreen(
             1 -> {
                 item {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (hasDub) {
+                            PillChip("Sub", !dub) { dub = false; PlayerPrefs.preferDub = false; range = 0 }
+                            Spacer(Modifier.width(8.dp))
+                            PillChip("Dub", dub) { dub = true; PlayerPrefs.preferDub = true; range = 0 }
+                            Spacer(Modifier.width(16.dp))
+                        }
                         if (!isMovie) {
                             PillChip("Oldest", !newest) { newest = false; range = 0 }
                             Spacer(Modifier.width(8.dp))

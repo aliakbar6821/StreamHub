@@ -34,6 +34,10 @@ object PlayerPrefs {
         get() = p?.getBoolean("autoNext", true) ?: true
         set(v) { p?.edit()?.putBoolean("autoNext", v)?.apply() }
 
+    var preferDub: Boolean
+        get() = p?.getBoolean("preferDub", false) ?: false
+        set(v) { p?.edit()?.putBoolean("preferDub", v)?.apply() }
+
     var uiScale: Float
         get() = p?.getFloat("uiScale", 0.82f) ?: 0.82f
         set(v) { p?.edit()?.putFloat("uiScale", v)?.apply() }
