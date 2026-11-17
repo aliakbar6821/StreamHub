@@ -20,3 +20,12 @@
 # Runtime helpers may be referenced only by external provider bytecode.
 -keep class kotlinx.serialization.** { *; }
 -keep class org.mozilla.javascript.** { *; }
+
+# SH_BATCH08_R8_ANDROID_OPTIONALS
+# Optional desktop integrations in retained Rhino/Jackson classes; absent on Android.
+# These rules do not implement these APIs or make desktop scripting paths usable.
+-dontwarn java.beans.**
+-dontwarn javax.script.**
+-dontwarn jdk.dynalink.**
+# Nullness metadata referenced by jsoup, not an Android runtime API.
+-dontwarn org.jspecify.annotations.**
