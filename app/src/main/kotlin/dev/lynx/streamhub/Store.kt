@@ -207,6 +207,10 @@ object Store {
 
     fun isWatched(epId: String) = watched.contains(epId)
 
+    fun unmarkWatched(epId: String) {
+        if (watched.remove(epId)) putStrings("watched", watched.toList())
+    }
+
     fun markWatched(epId: String) {
         if (!watched.contains(epId)) {
             watched.add(epId)

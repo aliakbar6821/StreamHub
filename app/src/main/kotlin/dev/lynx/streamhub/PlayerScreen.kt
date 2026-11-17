@@ -720,10 +720,8 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
         )
 
         // controls
-        AnimatedVisibility(
+        FadeVis(
             visible = controls && !locked && page.isEmpty(),
-            enter = fadeIn(),
-            exit = fadeOut(),
         ) {
             Box(Modifier.fillMaxSize().background(Color(0x55000000))) {
                 // top bar
@@ -851,10 +849,8 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
         }
 
         // unlock button
-        AnimatedVisibility(
+        FadeVis(
             visible = locked && controls,
-            enter = fadeIn(),
-            exit = fadeOut(),
             modifier = Modifier.align(Alignment.CenterStart).padding(24.dp),
         ) {
             RoundBtn(52.dp, {
@@ -927,6 +923,7 @@ fun PlayerScreen(req: PlayRequest, onBack: () -> Unit) {
                 modifier = Modifier.weight(1f),
                 media = req.item,
                 extId = req.ext?.id ?: Store.extIdFor(req.item.id) ?: "",
+                ext = req.ext ?: Store.ownerOf(req.item.id),
                 ep = ep,
                 episodes = shownEps,
                 durMs = durMs,

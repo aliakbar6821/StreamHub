@@ -22,6 +22,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import dev.lynx.streamhub.api.Extension
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,6 +57,7 @@ fun WatchInfo(
     modifier: Modifier,
     media: MediaItem,
     extId: String,
+    ext: Extension?,
     ep: Episode,
     episodes: List<Episode>,
     durMs: Long,
@@ -66,6 +78,8 @@ fun WatchInfo(
         if (current > 2) listState.scrollToItem(3 + current)
     }
 
+    var sheetEp by remember { mutableStateOf<Episode?>(null) }
+    sheetEp?.let { DownloadSheet(media, it, ext) { sheetEp = null } }
     val title = ep.title?.takeIf { it.isNotBlank() } ?: media.title
     val meta = buildList {
         if (!isMovie) add("Episode ${ep.number.toInt()}")
@@ -151,14 +165,15 @@ fun WatchInfo(
                 )
             }
             items(episodes) { e ->
-                WatchEpisodeRow(media, e, e.id == ep.id) { onEpisode(e) }
+                WatchEpisodeRow(media, e, e.id == ep.id, onDownload = { sheetEp = e }) { onEpisode(e) }
             }
         }
     }
 }
 
 @Composable
-private fun WatchEpisodeRow(item: MediaItem, e: Episode, current: Boolean, onClick: () -> Unit) {
+private fun WatchEpisodeRow(item: MediaItem, e: Episode, current: Boolean, onDownload: () -> Unit, onClick: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
     val sv = MaterialTheme.colorScheme.surfaceVariant
     val status = when {
         current -> "Now playing"
@@ -209,5 +224,44 @@ private fun WatchEpisodeRow(item: MediaItem, e: Episode, current: Boolean, onCli
                 Text(status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        Box {
+            IconButton(onClick = { menu = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "More")
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                val done = Store.isWatched(e.id)
+                DropdownMenuItem(
+                    text = { Text(if (done) "Mark as unwatched" else "Mark as watched") },
+                    onClick = {
+                        menu = false
+                        if (done) Store.unmarkWatched(e.id) else Store.markWatched(e.id)
+                    },
+                )
+                if (!Store.hasDownload(e.id)) {
+                    DropdownMenuItem(
+                        text = { Text("Download") },
+                        onClick = {
+                            menu = false
+                            onDownload()
+                        },
+                    )
+                }
+            }
+        }
     }
+}
+
+/** Fade in/out wrapper that is not a scope extension, so it works inside any Box/Column. */
+@Composable
+fun FadeVis(
+    visible: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    androidx.compose.animation.AnimatedVisibility(
+        visible = visible,
+        modifier = modifier,
+        enter = androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.fadeOut(),
+    ) { content() }
 }
