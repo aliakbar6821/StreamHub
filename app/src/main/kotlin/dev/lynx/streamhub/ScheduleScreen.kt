@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
@@ -28,21 +29,55 @@ import java.util.Locale
 
 data class Airing(val episode: String, val ts: Long, val title: String, val image: String, val studio: String)
 
-private const val API = "https://ani-station-schedule-api.vercel.app"
+private const val ANILIST = "https://graphql.anilist.co"
+private const val GQL = "query(\$from:Int,\$to:Int,\$page:Int){Page(page:\$page,perPage:50){pageInfo{hasNextPage}airingSchedules(airingAt_greater:\$from,airingAt_lesser:\$to,sort:TIME){episode airingAt media{title{romaji english}coverImage{large}studios(isMain:true){nodes{name}}isAdult}}}}"
+
+private fun gqlPage(from: Long, to: Long, page: Int): JSONObject {
+    val con = URL(ANILIST).openConnection() as HttpURLConnection
+    con.requestMethod = "POST"
+    con.doOutput = true
+    con.connectTimeout = 15000
+    con.readTimeout = 30000
+    con.setRequestProperty("Content-Type", "application/json")
+    con.setRequestProperty("Accept", "application/json")
+    con.setRequestProperty("User-Agent", "StreamHub/0.1")
+    val body = JSONObject().put("query", GQL)
+        .put("variables", JSONObject().put("from", from).put("to", to).put("page", page))
+    con.outputStream.use { it.write(body.toString().toByteArray()) }
+    return try {
+        if (con.responseCode != 200) throw Exception("Schedule server error ${con.responseCode}")
+        JSONObject(con.inputStream.bufferedReader().use { it.readText() })
+    } finally {
+        con.disconnect()
+    }
+}
 
 private suspend fun fetchSchedule(): List<Airing> = withContext(Dispatchers.IO) {
     val c = Calendar.getInstance()
-    val m = c.get(Calendar.MONTH)
-    val season = when { m < 3 -> "winter"; m < 6 -> "spring"; m < 9 -> "summer"; else -> "fall" }
-    val con = URL("$API/$season-${c.get(Calendar.YEAR)}/tv").openConnection() as HttpURLConnection
-    con.connectTimeout = 15000
-    con.readTimeout = 40000
-    val arr = JSONArray(con.inputStream.bufferedReader().use { it.readText() })
-    (0 until arr.length()).mapNotNull { i ->
-        val o = arr.getJSONObject(i)
-        val ts = o.optString("timeStamp").toLongOrNull() ?: return@mapNotNull null
-        Airing(o.optString("episode"), ts * 1000, o.optString("title"), o.optString("imageUrl"), o.optString("animeStudio"))
-    }.sortedBy { it.ts }
+    c.firstDayOfWeek = Calendar.MONDAY
+    c.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+    c.set(Calendar.HOUR_OF_DAY, 0); c.set(Calendar.MINUTE, 0); c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
+    val from = c.timeInMillis / 1000 - 1
+    val to = from + 7 * 86400 + 2
+    val out = ArrayList<Airing>()
+    var page = 1
+    while (page <= 8) {
+        val pg = gqlPage(from, to, page).getJSONObject("data").getJSONObject("Page")
+        val arr = pg.getJSONArray("airingSchedules")
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val m = o.getJSONObject("media")
+            if (m.optBoolean("isAdult", false)) continue
+            val t = m.getJSONObject("title")
+            val title = t.optString("english", "").takeIf { it.isNotBlank() && it != "null" } ?: t.optString("romaji")
+            val img = m.optJSONObject("coverImage")?.optString("large") ?: ""
+            val studio = m.optJSONObject("studios")?.optJSONArray("nodes")?.optJSONObject(0)?.optString("name") ?: ""
+            out.add(Airing("EP " + o.optInt("episode"), o.getLong("airingAt") * 1000, title, img, studio))
+        }
+        if (!pg.getJSONObject("pageInfo").optBoolean("hasNextPage", false)) break
+        page++
+    }
+    out.sortedBy { it.ts }
 }
 
 private fun dow(ts: Long): Int = Calendar.getInstance().apply { timeInMillis = ts }.get(Calendar.DAY_OF_WEEK)
