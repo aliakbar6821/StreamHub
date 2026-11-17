@@ -77,6 +77,7 @@ fun App() {
                 media = item,
                 onBack = { openItem = null },
                 onPlay = { ext, ep, start -> playing = PlayRequest(ext, item, ep, start, null) },
+                onSearch = { q -> Session.query = q; Session.searched = false; Session.results = emptyList(); openItem = null; showSearch = true },
             )
         }
     } else if (showSearch) {

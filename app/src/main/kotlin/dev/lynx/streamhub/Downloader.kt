@@ -10,11 +10,12 @@ import java.io.File
 
 object Downloader {
     /** Returns false if this episode was already downloaded. */
-    fun enqueue(context: Context, item: MediaItem, ep: Episode, s: Stream): Boolean {
+    fun enqueue(context: Context, item: MediaItem, ep: Episode, s: Stream, label: String = "", sd: Boolean = false): Boolean {
         if (Store.hasDownload(ep.id)) return false
         val ext = s.url.substringBefore('?').substringAfterLast('.', "mp4").take(5)
-        val name = "${item.id}_${ep.number.toInt()}.$ext".replace(Regex("[^A-Za-z0-9._-]"), "_")
-        val dir = context.getExternalFilesDir("downloads") ?: File(context.filesDir, "downloads")
+        val name = "${item.id.hashCode()}_${ep.id.hashCode()}.$ext".replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val dirs = context.getExternalFilesDirs("downloads")
+        val dir = (if (sd) dirs.getOrNull(1) else null) ?: context.getExternalFilesDir("downloads") ?: File(context.filesDir, "downloads")
         dir.mkdirs()
         val file = File(dir, name)
         val req = DownloadManager.Request(Uri.parse(s.url))
@@ -24,6 +25,7 @@ object Downloader {
         s.headers.forEach { (k, v) -> req.addRequestHeader(k, v) }
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val id = dm.enqueue(req)
+        context.getSharedPreferences("dl_meta", Context.MODE_PRIVATE).edit().putString(id.toString(), label).apply()
         Store.addDownload(
             DownloadEntry(item, ep.id, ep.number, ep.title ?: "", file.absolutePath, id)
         )

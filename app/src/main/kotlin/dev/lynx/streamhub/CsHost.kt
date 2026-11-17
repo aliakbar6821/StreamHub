@@ -24,7 +24,10 @@ import dev.lynx.streamhub.api.HomeSection
 import dev.lynx.streamhub.api.MediaDetails
 import dev.lynx.streamhub.api.MediaItem
 import dev.lynx.streamhub.api.MediaType
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -214,9 +217,19 @@ class CsExtension(private val api: MainAPI) : Extension {
 
     override suspend fun getStreams(episodeId: String): List<ShStream> = withContext(Dispatchers.IO) {
         val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-        withTimeoutOrNull(25_000L) {
+        val job = CoroutineScope(SupervisorJob() + Dispatchers.IO).async {
             runCatching { api.loadLinks(episodeId, false, { }, { l -> links.add(l) }) }
         }
+        val t0 = System.currentTimeMillis()
+        var firstAt = 0L
+        while (job.isActive) {
+            delay(250)
+            val t = System.currentTimeMillis()
+            if (firstAt == 0L && links.isNotEmpty()) firstAt = t
+            if (firstAt != 0L && t - firstAt > 5000) break
+            if (t - t0 > 25000) break
+        }
+        job.cancel()
         links.toList()
             .filter { it.url.isNotBlank() }
             .sortedByDescending { it.quality }

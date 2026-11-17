@@ -37,14 +37,14 @@ fun PillChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Text(
         label,
         color = fg,
-        fontSize = 13.sp,
+        fontSize = 16.sp,
         fontWeight = FontWeight.Medium,
         maxLines = 1,
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
             .background(bg)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+            .padding(horizontal = 20.dp, vertical = 11.dp),
     )
 }
 
