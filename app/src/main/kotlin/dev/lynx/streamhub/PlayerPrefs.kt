@@ -26,6 +26,14 @@ object PlayerPrefs {
         get() = p?.getFloat("speed", 1f) ?: 1f
         set(v) { p?.edit()?.putFloat("speed", v)?.apply() }
 
+    var lockedHeight: Int
+        get() = p?.getInt("lockedHeight", -1) ?: -1
+        set(v) { p?.edit()?.putInt("lockedHeight", v)?.apply() }
+
+    var lockQuality: Boolean
+        get() = p?.getBoolean("lockQuality", true) ?: true
+        set(v) { p?.edit()?.putBoolean("lockQuality", v)?.apply() }
+
     var resize: Int
         get() = p?.getInt("resize", 0) ?: 0
         set(v) { p?.edit()?.putInt("resize", v)?.apply() }

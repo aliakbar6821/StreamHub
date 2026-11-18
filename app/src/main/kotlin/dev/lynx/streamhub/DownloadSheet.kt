@@ -28,7 +28,7 @@ import kotlinx.coroutines.withContext
 fun epLabel(item: MediaItem, n: Float): String =
     if (item.type == MediaType.MOVIE) "Movie" else "Episode ${n.toInt()}"
 
-fun isHls(s: Stream): Boolean = s.url.contains("m3u8", ignoreCase = true) ||
+fun isHls(s: Stream): Boolean = ProviderPlayback.video(s.url).mime == "application/x-mpegURL" || s.url.contains("m3u8", ignoreCase = true) ||
     s.quality?.contains("[HLS]", ignoreCase = true) == true
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -62,19 +62,16 @@ fun DownloadSheet(
         fun accept(raw: Stream) {
             val stream = if (ext != null) AudioMetadataStore.enrich(ext.id, ext.name, ep.id, raw) else raw
             if (!seen.add(stream.url)) return
+            if (refresh > 0) VerifiedStreams.invalidate(stream)
             discovered.add(stream)
             ext?.id?.let { StreamChoiceCache.put(it, ep.id, discovered) }
-            if (!isHls(stream)) {
-                options = (options + stream).distinctBy { it.url }
-            } else {
-                preparing++
-                launch {
-                    try {
-                        val (variants, warning) = downloadVariants(stream)
-                        options = (options + variants).distinctBy { it.url }
-                        if (warning != null) warnings = (warnings + warning).distinct()
-                    } finally { preparing-- }
-                }
+            preparing++
+            launch {
+                try {
+                    val (variants, warning) = DownloadVerification.options(context, stream)
+                    options = (options + variants).distinctBy { it.url to streamChoice(it).audioKey }
+                    if (warning != null) warnings = (warnings + warning).distinct()
+                } finally { preparing-- }
             }
         }
         try {
@@ -117,7 +114,7 @@ fun DownloadSheet(
     }
     val exactOptions = if (qualityChosen) downloadChoicesAtHeight(options, selectedHeight) else emptyList()
     val languages = exactOptions.map { streamChoice(it) }.distinctBy { it.audioKey }
-    LaunchedEffect(busy, qualityChosen, options) {
+    LaunchedEffect(busy, qualityChosen, options, selectedHeight) {
         if (qualityChosen && !initialized && languages.isNotEmpty()) {
             val wanted = preferredAudioKey(AppPrefs.audio(media.id))
             language = languages.firstOrNull { it.audioKey == wanted }?.audioKey
@@ -140,7 +137,7 @@ fun DownloadSheet(
             Text("Download " + epLabel(media, ep.number),
                 style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(16.dp))
-            Text("Source", style = MaterialTheme.typography.labelLarge,
+            Text("Verified source", style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(providerDisplayName(ext?.name), style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(vertical = 8.dp))
@@ -160,10 +157,8 @@ fun DownloadSheet(
                             if (!qualityChosen || selectedHeight != height) {
                                 selectedHeight = height
                                 qualityChosen = true
-                                // Clear stale choices immediately; the provider is queried again.
-                                options = emptyList()
-                                searching = true
-                                refresh++
+                                // Available verified options are already cached; change selection locally.
+                                initialized = false
                             }
                         }
                     }
@@ -217,7 +212,7 @@ fun DownloadSheet(
                         val label = listOfNotNull(choice.audioLabel, choice.height?.let { "${it}p" }).joinToString(" · ")
                         DownloadAccess.request(context) {
                             val ok = Downloader.enqueue(context, media, ep, stream, label, sourceName = ext?.name)
-                            Toast.makeText(context, if (ok) "Download started" else "Not started. Already queued or permission unavailable.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, if (ok) "Download started" else "Not started. Verification expired, already queued, or permission unavailable. Refresh options.", Toast.LENGTH_SHORT).show()
                             if (ok) onDismiss()
                         }
                     }

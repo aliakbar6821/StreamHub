@@ -327,7 +327,10 @@ fun PlayerScreen(
     var posMs by remember { mutableLongStateOf(0L) }
     var durMs by remember { mutableLongStateOf(0L) }
     var tracks by remember { mutableStateOf(Tracks.EMPTY) }
-    var qualityH by remember { mutableIntStateOf(-1) }
+    var qualityH by remember { mutableIntStateOf(if (PlayerPrefs.lockQuality) PlayerPrefs.lockedHeight else -1) }
+    var lockQuality by remember { mutableStateOf(PlayerPrefs.lockQuality) }
+    var verifiedSources by remember(ep.id, reloadKey) { mutableStateOf<Map<String, VerifiedStreams.Result>>(emptyMap()) }
+    val probeSlots = remember { kotlinx.coroutines.sync.Semaphore(1) }
     var speed by remember { mutableFloatStateOf(PlayerPrefs.speed) }
     var resize by remember { mutableIntStateOf(PlayerPrefs.resize) }
     var subScale by remember { mutableFloatStateOf(PlayerPrefs.subScale) }
@@ -367,7 +370,6 @@ fun PlayerScreen(
     var newestEpisodes by remember(req.item.id) { mutableStateOf(false) }
     var episodeRange by remember(req.item.id) { mutableIntStateOf(0) }
     var scrub by remember { mutableStateOf<Float?>(null) }
-    var preferredAudioApplied by remember(ep.id, reloadKey) { mutableStateOf(false) }
     var discovering by remember { mutableStateOf(false) }
     var failedSourceUrls by remember(ep.id, reloadKey) { mutableStateOf<Set<String>>(emptySet()) }
 
@@ -397,7 +399,7 @@ fun PlayerScreen(
                 p.setHandleAudioBecomingNoisy(true)
                 var tp = p.trackSelectionParameters.buildUpon()
                 val audio = AppPrefs.audio(req.item.id)
-                if (audio.isNotEmpty()) tp = tp.setPreferredAudioLanguage(audio)
+                if (audio.isNotEmpty() && audio != "original") tp = tp.setPreferredAudioLanguage(audio)
                 val sl = AppPrefs.subtitle(req.item.id)
                 if (sl == "off") {
                     tp = tp.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
@@ -426,7 +428,7 @@ fun PlayerScreen(
 
     fun syncPlayback() {
         playbackIntent.pictureInPicture = PlayerWindowState.inPip
-        exo.playWhenReady = playbackIntent.shouldPlay
+        exo.playWhenReady = playbackIntent.shouldPlay && error == null
     }
     fun requestPlayback(wantsPlay: Boolean) {
         playbackIntent.wantsPlay = wantsPlay
@@ -459,46 +461,6 @@ fun PlayerScreen(
         posMs = 0L
     }
 
-    val dubOf = { s: Stream -> sourceAudioVersion(s) }
-    val mixedAudio = streams.any { dubOf(it) == true } && streams.any { dubOf(it) == false }
-    val hasDubChoice = dubList.isNotEmpty() || mixedAudio
-
-    fun setDub(want: Boolean) {
-        if (want == dubOn && (dubList.isNotEmpty() ||
-                streams.getOrNull(sourceIdx)?.let { dubOf(it) == want } == true)) {
-            page = ""
-            return
-        }
-        val pos = exo.currentPosition.coerceAtLeast(0L)
-        if (dubList.isNotEmpty()) {
-            val to = if (want) dubList else episodes
-            val season = ep.title?.substringBefore(" · ")?.takeIf { it.matches(Regex("S[0-9]+")) }
-            val target = to.firstOrNull { candidate ->
-                candidate.number == ep.number &&
-                    (season == null || candidate.title?.startsWith("$season · ") == true)
-            }
-            if (target == null) {
-                showHud("No matching episode in that source version")
-                return
-            }
-            dubOn = want
-            PlayerPrefs.preferDub = want
-            switchTo(target)
-            pendingStart = pos
-        } else {
-            val i = streams.indexOfFirst { dubOf(it) == want }
-            if (i < 0) {
-                showHud("No matching source version available")
-                return
-            }
-            dubOn = want
-            PlayerPrefs.preferDub = want
-            pendingStart = pos
-            sourceIdx = i
-        }
-        page = ""
-    }
-
     fun seekBy(d: Long) {
         var t = (exo.currentPosition + d).coerceAtLeast(0L)
         if (exo.duration > 0) t = t.coerceAtMost(exo.duration)
@@ -512,49 +474,23 @@ fun PlayerScreen(
 
     fun setQuality(h: Int) {
         qualityH = h
-        if (h < 0) tweak { it.clearVideoSizeConstraints() }
-        else tweak { it.setMaxVideoSize(Int.MAX_VALUE, h) }
-    }
-
-    fun pickVariant(index: Int, requestedHeight: Int? = null) {
-        if (index !in streams.indices) return
-        preferredAudioApplied = true
-        failedSourceUrls = emptySet()
-        if (sourceIdx != index) {
-            pendingStart = exo.currentPosition.coerceAtLeast(0L)
-            tracks = Tracks.EMPTY
-            sourceIdx = index
+        PlayerPrefs.lockedHeight = if (lockQuality) h else -1
+        if (h > 0 && tracks.groups.none { it.type == C.TRACK_TYPE_VIDEO }) return
+        try {
+            exo.trackSelectionParameters = QualitySelection.select(exo.trackSelectionParameters, tracks, h, lockQuality)
+        } catch (unavailable: IllegalArgumentException) {
+            exo.pause()
+            error = unavailable.message
         }
-        qualityH = requestedHeight ?: -1
-        tweak { it.clearVideoSizeConstraints() }
-        if (requestedHeight != null) setQuality(requestedHeight)
-        page = ""
-    }
-
-    fun pickLanguage(code: String) {
-        val current = streams.getOrNull(sourceIdx)?.let { streamChoice(it) }
-        val index = bestStreamIndex(streams, code, current?.height, current?.codec) ?: return
-        AppPrefs.setAudio(req.item.id, code.ifBlank { "original" })
-        if (code != "original" && code.isNotBlank()) tweak { it.setPreferredAudioLanguage(code) }
-        else tweak { it.setPreferredAudioLanguage(null) }
-        pickVariant(index)
     }
 
     fun pickResolution(height: Int) {
-        val current = streams.getOrNull(sourceIdx)?.let { streamChoice(it) }
-        val actual = trackOpts(tracks, C.TRACK_TYPE_VIDEO).map { it.height }.filter { it > 0 }.distinct()
-        val adaptive = actual.size > 1
-        if ((adaptive && (height < 0 || height in actual)) ||
-            (height in actual && current?.height == null)
-        ) {
-            setQuality(height)
-            page = ""
-            return
-        }
-        val language = current?.audioKey ?: ""
-        val index = bestStreamIndex(streams, language, if (height < 0) null else height, current?.codec)
-        if (index != null) pickVariant(index, height.takeIf { it > 0 })
-        else { setQuality(height); page = "" }
+        val available = trackOpts(tracks, C.TRACK_TYPE_VIDEO).map { it.height }.filter { it > 0 }.distinct()
+        if (height > 0 && height !in available) { showHud("That resolution is not reported by this source"); return }
+        error = null
+        setQuality(height)
+        if (error == null) syncPlayback()
+        page = ""
     }
 
     fun tryCompatibleVariant(): Boolean {
@@ -562,14 +498,16 @@ fun PlayerScreen(
         failedSourceUrls = failedSourceUrls + current.url
         val meta = streamChoice(current)
         val remaining = streams.indices.filter {
-            streams[it].url !in failedSourceUrls && streamChoice(streams[it]).audioKey == meta.audioKey
+            streams[it].url !in failedSourceUrls && verifiedSources[streams[it].url]?.complete == true &&
+                (!lockQuality || qualityH <= 0 || qualityH in verifiedSources[streams[it].url]!!.heights) &&
+                streamChoice(streams[it]).audioKey == meta.audioKey
         }
         val next = remaining.minByOrNull {
             kotlin.math.abs((streamChoice(streams[it]).height ?: 0) - (meta.height ?: 0))
         } ?: return false
         pendingStart = exo.currentPosition.coerceAtLeast(0L)
         tracks = Tracks.EMPTY
-        qualityH = -1
+        if (!lockQuality) qualityH = -1
         tweak { it.clearVideoSizeConstraints() }
         sourceIdx = next
         return true
@@ -788,7 +726,7 @@ fun PlayerScreen(
             tracks = Tracks.EMPTY
             isPlaying = false
             buffering = true
-            qualityH = -1
+            if (!lockQuality) qualityH = -1
             exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
                 .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
@@ -819,8 +757,37 @@ fun PlayerScreen(
                 delay(1000)
             }
         }
+        fun acceptSource(stream: Stream) {
+            if (reloadKey > 0) VerifiedStreams.invalidate(stream)
+            if (streams.none { it.url == stream.url }) streams = streams + stream
+            streamMetadataRevision++
+            launch {
+                // Give the unqualified adaptive/master link priority over labelled rendition URLs.
+                if (streamChoice(stream).height != null) delay(1200L)
+                probeSlots.acquire()
+                try {
+                    val previous = verifiedSources[streams.getOrNull(sourceIdx)?.url]
+                    // Once a complete source exists, do not waste bandwidth probing every labelled child.
+                    if (previous?.complete == true && streamChoice(stream).height != null) return@launch
+                    val result = VerifiedStreams.inspect(context, stream)
+                    verifiedSources = verifiedSources + (stream.url to result)
+                    val adaptiveUpgrade = previous?.complete == true && previous.heights.size <= 1 &&
+                        result.heights.size > 1 && exo.currentPosition < 15_000L
+                    val retainsLockedQuality = !lockQuality || qualityH <= 0 || qualityH in result.heights
+                    if (result.complete && (previous?.complete != true || (adaptiveUpgrade && retainsLockedQuality))) {
+                        pendingStart = exo.currentPosition.coerceAtLeast(0L)
+                        sourceIdx = streams.indexOfFirst { it.url == stream.url }.coerceAtLeast(0)
+                        error = null
+                    }
+                } finally { probeSlots.release() }
+            }
+        }
         try {
-            if (e is CsExtension) {
+            val cached = if (reloadKey > 0) emptyList() else StreamChoiceCache.get(e.id, ep.id)
+            if (cached.isNotEmpty()) {
+                remoteSubs = SubtitleChoiceCache.get(e.id, ep.id)
+                cached.forEach { acceptSource(it) }
+            } else if (e is CsExtension) {
                 val ch = Channel<Stream>(Channel.UNLIMITED)
                 launch {
                     try {
@@ -833,6 +800,7 @@ fun PlayerScreen(
                                         remoteSubs.none { it.second == url }
                                     ) {
                                         remoteSubs = remoteSubs + (label to url)
+                                        SubtitleChoiceCache.put(e.id, requestedEpisode, remoteSubs)
                                     }
                                 }
                             },
@@ -840,11 +808,10 @@ fun PlayerScreen(
                     } finally { ch.close() }
                 }
                 for (s in ch) {
-                    if (streams.none { it.url == s.url }) streams = streams + s
-                    streamMetadataRevision++
+                    acceptSource(s)
                 }
             } else {
-                streams = withContext(Dispatchers.IO) { e.getStreams(ep.id) }
+                withContext(Dispatchers.IO) { e.getStreams(ep.id) }.forEach { acceptSource(it) }
             }
             if (streams.isEmpty()) error = (e as? CsExtension)?.lastError
                 ?: "This source returned no playable links. Try another version or extension."
@@ -908,10 +875,12 @@ fun PlayerScreen(
     }
 
     // 2) play the selected source; fall back to the next one on error or stall
-    LaunchedEffect(ep.id, sourceIdx, attempt, streamsFor, streams.isEmpty()) {
+    LaunchedEffect(ep.id, sourceIdx, attempt, streamsFor, streams.isEmpty(),
+        verifiedSources[streams.getOrNull(sourceIdx)?.url]?.complete) {
         if (req.localPath == null && (streamsFor != ep.id || streams.isEmpty())) {
             return@LaunchedEffect
         }
+        if (req.localPath == null && verifiedSources[streams.getOrNull(sourceIdx)?.url]?.complete != true) return@LaunchedEffect
         error = null
         try {
             val lp = req.localPath
@@ -1043,21 +1012,16 @@ fun PlayerScreen(
     }
     BackHandler(enabled = page.isNotEmpty()) { page = "" }
 
-    LaunchedEffect(streams.map { it.url }, ep.id) {
-        val source = req.ext?.id
-        if (source != null && streamsFor == ep.id) StreamChoiceCache.put(source, ep.id, streams)
-        val wanted = preferredAudioKey(AppPrefs.audio(req.item.id))
-        if (!preferredAudioApplied && wanted != null) {
-            val index = bestStreamIndex(streams, wanted, null)
-            if (index != null) {
-                preferredAudioApplied = true
-                if (index != sourceIdx) {
-                    pendingStart = exo.currentPosition.coerceAtLeast(0L)
-                    tracks = Tracks.EMPTY
-                    sourceIdx = index
-                }
-            }
+    LaunchedEffect(verifiedSources, discovering, ep.id) {
+        req.ext?.id?.let { if (streamsFor == ep.id) StreamChoiceCache.put(it, ep.id, streams) }
+        if (!discovering && streams.isNotEmpty() && streams.all { it.url in verifiedSources } &&
+            verifiedSources.values.none { it.complete }) {
+            error = "No complete playable audio/video source was verified. Resolution-only links may be video-only. Retry source lookup."
+            buffering = false
         }
+    }
+    LaunchedEffect(tracks, qualityH, lockQuality) {
+        if (qualityH > 0 && lockQuality) setQuality(qualityH)
     }
 
     LaunchedEffect(page, req.item.id, relatedRefresh) {
@@ -1096,60 +1060,29 @@ fun PlayerScreen(
     val currentChoice = streams.getOrNull(sourceIdx)?.let { streamChoice(it) }
     val providerName = if (req.localPath != null) "Downloaded file"
         else providerDisplayName((req.ext ?: Store.ownerOf(req.item.id))?.name)
-    val externalAudio = streams.map { streamChoice(it) }.filter { it.language != null }
-        .distinctBy { it.audioKey }
-    val embeddedCodes = audioOpts.mapNotNull { audioLanguageCode(it.lang) }.toSet()
-    val externalRows = externalAudio.filter {
-        it.audioKey !in embeddedCodes && !(it.audioKey == currentChoice?.audioKey && audioOpts.size == 1)
-    }
-    val selectedVersion = when {
-        currentChoice?.language == "original" -> false
-        isAnilightProvider(providerName) && currentChoice?.language == "en" -> true
-        else -> sourceAudioVersion(streams.getOrNull(sourceIdx))
-            ?: if (dubList.isNotEmpty()) dubOn else null
-    }
     fun audioOptionLabel(option: TrackOpt): String {
-        if (audioOpts.size == 1 && (selectedVersion == false || currentChoice?.language == "original")) return "Original"
-        audioLanguageName(option.lang)?.let { return it }
-        audioLanguageName(option.label)?.let { return it }
-        if (audioOpts.size == 1) {
-            currentChoice?.takeIf { it.language != null }?.let { return it.audioLabel }
-            if (hasDubChoice && selectedVersion == true) return if (isAnilightProvider(providerName)) "English" else "Other"
+        val format = option.group.getTrackFormat(option.index)
+        val language = langName(format.language) ?: option.label
+        val channels = when(format.channelCount) { 1 -> "Mono"; 2 -> "Stereo"; else -> format.channelCount.takeIf { it > 0 }?.let { "$it ch" } }
+        val codec = when(format.sampleMimeType) {
+            "audio/mp4a-latm" -> "AAC"; "audio/opus" -> "Opus"
+            "audio/ac3" -> "AC-3"; "audio/eac3", "audio/eac3-joc" -> "E-AC-3"
+            else -> format.sampleMimeType?.removePrefix("audio/")
         }
-        return untaggedAudioLabel(selectedVersion, audioOpts.size, audioOpts.indexOf(option))
+        return listOfNotNull(language,channels,codec).joinToString(" · ")
     }
-    val audioActionsRaw = buildList<AudioAction> {
-        audioOpts.forEach { option ->
-            val label = if (audioOpts.size == 1 &&
-                (selectedVersion == false || currentChoice?.language == "original")) "Original"
-                else audioOptionLabel(option)
-            add(AudioAction(label, option.selected) { pickAudio(option); page = "" })
-        }
-        externalRows.forEach { choice ->
-            add(AudioAction(choice.audioLabel, choice.audioKey == currentChoice?.audioKey) { pickLanguage(choice.audioKey) })
-        }
-        if (hasDubChoice) {
-            add(AudioAction("Original", selectedVersion == false) {
-                AppPrefs.setAudio(req.item.id, "original"); setDub(false)
-            })
-            val alternate = if (isAnilightProvider(providerName)) "English" else "Other"
-            add(AudioAction(alternate, selectedVersion == true) {
-                if (alternate == "English") AppPrefs.setAudio(req.item.id, "en")
-                setDub(true)
-            })
+    // Only tracks from the prepared source are language choices. Provider names are hints only.
+    val audioActions = audioOpts.map { option ->
+        AudioAction(if (audioOpts.size == 1) "Original" else audioOptionLabel(option), option.selected) {
+            pickAudio(option); page = ""
         }
     }.groupBy { it.label }.values.map { rows -> rows.firstOrNull { it.selected } ?: rows.first() }
-    val audioActions = if (audioActionsRaw.size == 1)
-        listOf(audioActionsRaw.first().copy(label = "Original")) else audioActionsRaw
-    val currentAudioLabel = audioActions.firstOrNull { it.selected }?.label ?: "Original"
+    val currentAudioLabel = audioActions.firstOrNull { it.selected }?.label ?: if (discovering) "Checking…" else "Unavailable"
     val adaptiveHeights = videoOpts.map { it.height }.filter { it > 0 }.distinct()
-    val externalHeights = streams.filter { streamChoice(it).audioKey == currentChoice?.audioKey.orEmpty() }
-        .mapNotNull { streamChoice(it).height }
-    val qualities = (adaptiveHeights + externalHeights).distinct().sortedDescending()
+    val qualities = adaptiveHeights.sortedDescending()
     val qualityLabel = when {
         qualityH > 0 -> "${qualityH}p"
         adaptiveHeights.size > 1 -> "Auto"
-        currentChoice?.height != null -> "${currentChoice.height}p"
         adaptiveHeights.size == 1 -> "${adaptiveHeights.first()}p"
         else -> "Auto"
     }
@@ -1177,6 +1110,7 @@ fun PlayerScreen(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     useController = false
+                    setKeepContentOnPlayerReset(true)
                     keepScreenOn = true
                     player = exo
                 }
@@ -1679,8 +1613,8 @@ fun PlayerScreen(
                                     items(audioActions, key = { it.label }) { option ->
                                         OptionRow(option.label, selected = option.selected) { option.run() }
                                     }
-                                    if (audioActions.isEmpty() && discovering) {
-                                        item { Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    if (audioActions.isEmpty()) {
+                                        item { Text("No verified audio tracks yet. Checking complete sources…", color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.padding(16.dp)) }
                                     }
                                 }
@@ -1712,6 +1646,16 @@ fun PlayerScreen(
                                 }
 
                                 "quality" -> {
+                                    item { SheetSwitchRow("Lock selected quality", lockQuality) {
+                                        lockQuality = it; PlayerPrefs.lockQuality = it
+                                        error = null
+                                        setQuality(qualityH)
+                                        if (error == null) syncPlayback()
+                                    } }
+                                    item { Text(if (lockQuality && qualityH > 0)
+                                        "Locked to ${qualityH}p. Slow connections may buffer; the app will not lower resolution."
+                                        else "Auto adapts to bandwidth. With lock off, a selected resolution is an upper limit.",
+                                        modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                                     item { OptionRow("Auto", selected = qualityH < 0 && qualityLabel == "Auto") {
                                         pickResolution(-1)
                                     } }

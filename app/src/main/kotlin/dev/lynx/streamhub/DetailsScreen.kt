@@ -465,7 +465,13 @@ fun DetailsScreen(
                         Toast.makeText(context, "Finding sources for ${targets.size} episodes\u2026", Toast.LENGTH_SHORT).show()
                         for (e in targets) {
                             try {
-                                val s = withContext(Dispatchers.IO) { ext?.getStreams(e.id)?.let { l -> l.firstOrNull { !isHls(it) } ?: l.firstOrNull() } }
+                                val found = withContext(Dispatchers.IO) { ext?.getStreams(e.id).orEmpty() }
+                                var selected: dev.lynx.streamhub.api.Stream? = null
+                                for (candidate in found) {
+                                    selected = DownloadVerification.options(context, candidate).first.firstOrNull()
+                                    if (selected != null) break
+                                }
+                                val s = selected
                                 if (s != null && Downloader.enqueue(context, media, e, s, s.quality ?: "", sourceName = ext?.name)) ok++
                             } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel
                             } catch (_: Exception) { }

@@ -19,7 +19,15 @@ object PlaybackSources {
         val http=DefaultHttpDataSource.Factory().setUserAgent(ua).setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(20_000).setAllowCrossProtocolRedirects(true)
             .setDefaultRequestProperties(headers.filterKeys { !it.equals("User-Agent",true) })
-        return DefaultMediaSourceFactory(DefaultDataSource.Factory(context,http))
+        val cache=androidx.media3.datasource.cache.CacheDataSource.Factory()
+            .setCache(PlaybackCache.get(context)).setUpstreamDataSourceFactory(DefaultDataSource.Factory(context,http))
+            .setCacheKeyFactory { spec ->
+                java.security.MessageDigest.getInstance("SHA-256").digest(
+                    (spec.uri.toString() + "\u0000" + headers.toSortedMap().toString()).toByteArray()
+                ).joinToString("") { "%02x".format(it.toInt() and 255) }
+            }
+            .setFlags(androidx.media3.datasource.cache.CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        return DefaultMediaSourceFactory(cache)
     }
     fun create(context: Context, item: MediaItem, stream: Stream): MediaSource {
         val info=ProviderPlayback.video(stream.url)

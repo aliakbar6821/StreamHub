@@ -157,3 +157,17 @@ fun providerAudioCode(provider: String, stream: Stream, episodeCode: String? = n
 
 fun preferredAudioKey(value: String?): String? =
     if (value.equals("original", true)) "original" else audioLanguageCode(value)
+
+/** External subtitles must survive short-lived source reuse too, not just the video URLs. */
+object SubtitleChoiceCache {
+    private data class Entry(val at: Long, val values: List<Pair<String,String>>)
+    private val entries=ConcurrentHashMap<String,Entry>()
+    fun put(source:String,episode:String,subtitles:List<Pair<String,String>>) {
+        entries["$source|$episode"]=Entry(System.currentTimeMillis(),subtitles.toList())
+        if(entries.size>16) entries.entries.minByOrNull { it.value.at }?.let { entries.remove(it.key) }
+    }
+    fun get(source:String,episode:String):List<Pair<String,String>> {
+        val entry=entries["$source|$episode"] ?: return emptyList()
+        return entry.values.takeIf { System.currentTimeMillis()-entry.at in 0..90_000L }.orEmpty()
+    }
+}

@@ -12,7 +12,7 @@ android {
         minSdk = 24
         targetSdk = 35
         versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1) + 100
-        versionName = "0.2.14"
+        versionName = "0.2.15"
         manifestPlaceholders["appLabel"] = "streamHub"
     }
     signingConfigs {

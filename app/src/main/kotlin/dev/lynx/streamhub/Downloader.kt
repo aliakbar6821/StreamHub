@@ -174,7 +174,8 @@ object Downloader {
 
     /** False means duplicate, access unavailable, or a separate-audio stream needing offline muxing. */
     fun enqueue(context: Context, item: MediaItem, ep: Episode, s: Stream, label: String = "", sourceName: String? = null): Boolean {
-        if (Store.hasDownload(ep.id) || ProviderPlayback.video(s.url).audio.isNotEmpty()) return false
+        if (Store.hasDownload(ep.id) || ProviderPlayback.video(s.url).audio.isNotEmpty() ||
+            VerifiedStreams.cached(s)?.complete != true) return false
         val app = context.applicationContext
         if (!DownloadAccess.canSavePublic(app)) return false
         val id = newId()
