@@ -1,4 +1,5 @@
 package dev.lynx.streamhub
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -99,9 +100,12 @@ object AniMeta {
         for (t in listOf(title, clean(title)).filter { it.isNotBlank() }.distinct()) {
             for (attempt in 0..1) {
                 try {
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     r = load(t)
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     break
-                } catch (e: Throwable) {
+                } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel
+                } catch (e: Exception) {
                     lastError = (e.javaClass.simpleName + ": " + (e.message ?: "")).take(120)
                 }
             }
@@ -124,8 +128,8 @@ object AniMeta {
         con.setRequestProperty("Accept", "application/json")
         con.setRequestProperty("User-Agent", "StreamHub/0.1")
         val body = JSONObject().put("query", Q).put("variables", JSONObject().put("s", query))
-        con.outputStream.use { it.write(body.toString().toByteArray()) }
         val text = try {
+            con.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             if (con.responseCode != 200) {
                 lastError = "AniList HTTP " + con.responseCode
                 return null
@@ -161,7 +165,9 @@ object AniMeta {
         }
         val genres = ArrayList<String>()
         val gl = m.optJSONArray("genres")
-        if (gl != null) for (i in 0 until gl.length()) genres.add(gl.getString(i))
+        if (gl != null) {
+            for (i in 0 until gl.length()) { genres.add(gl.getString(i)) }
+        }
         val next = m.optJSONObject("nextAiringEpisode")
         return AniInfo(
             banner = m.str("bannerImage"),

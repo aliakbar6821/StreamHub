@@ -42,9 +42,10 @@ object PlayerPrefs {
         get() = p?.getFloat("uiScale", 0.82f) ?: 0.82f
         set(v) { p?.edit()?.putFloat("uiScale", v)?.apply() }
 
-    var autoSkip: Boolean
-        get() = p?.getBoolean("autoSkip", false) ?: false
-        set(v) { p?.edit()?.putBoolean("autoSkip", v)?.apply() }
+    // A new preference deliberately discards the old fixed-duration auto-seek setting.
+    var skipPrompts: Boolean
+        get() = p?.getBoolean("skipPrompts", true) ?: true
+        set(v) { p?.edit()?.putBoolean("skipPrompts", v)?.apply() }
 
     var subFont: String
         get() = p?.getString("subFont", "default") ?: "default"

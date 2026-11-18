@@ -93,7 +93,8 @@ fun WatchInfo(
         mutableStateOf<Set<String>>(emptySet())
     }
 
-    LaunchedEffect(media.id, extId) {
+    var relatedRetry by remember(media.id, extId) { mutableStateOf(0) }
+    LaunchedEffect(media.id, extId, relatedRetry) {
         related = emptyList()
         relatedError = null
         if (ext == null) {
@@ -294,6 +295,7 @@ fun WatchInfo(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                 )
+                Button(onClick = { relatedRetry++ }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("Retry suggestions") }
             }
         } else {
             items(related, key = { "related:" + it.id }) { candidate ->

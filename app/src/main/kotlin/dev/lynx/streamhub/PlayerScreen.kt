@@ -332,13 +332,22 @@ fun PlayerScreen(
     var resize by remember { mutableIntStateOf(PlayerPrefs.resize) }
     var subScale by remember { mutableFloatStateOf(PlayerPrefs.subScale) }
     var autoNext by remember { mutableStateOf(PlayerPrefs.autoNext) }
-    var autoSkip by remember { mutableStateOf(PlayerPrefs.autoSkip) }
+    var skipPrompts by remember { mutableStateOf(PlayerPrefs.skipPrompts) }
     var subFont by remember { mutableStateOf(PlayerPrefs.subFont) }
     var subBold by remember { mutableStateOf(PlayerPrefs.subBold) }
     var subPos by remember { mutableFloatStateOf(PlayerPrefs.subPos) }
-    var skippedFor by remember { mutableStateOf("") }
-    var showSkip by remember(ep.id) { mutableStateOf(false) }
-    var skipShown by remember(ep.id) { mutableStateOf(false) }
+    val skipSource = req.localPath ?: streams.getOrNull(sourceIdx)?.url.orEmpty()
+    val skipIdentity = ep.id + "|" + skipSource
+    var detectedSegments by remember(skipIdentity) { mutableStateOf<List<SkipSegment>>(emptyList()) }
+    var manualSegments by remember(skipIdentity) { mutableStateOf<List<SkipSegment>>(emptyList()) }
+    var skipStatus by remember(skipIdentity) { mutableStateOf("Waiting for video duration…") }
+    var skipRetry by remember(skipIdentity) { mutableIntStateOf(0) }
+    var promptSegment by remember(skipIdentity) { mutableStateOf<SkipSegment?>(null) }
+    val skipGate = remember(skipIdentity) { SkipPromptGate() }
+    var markerStart by remember(skipIdentity) { mutableStateOf<Pair<String, Long>?>(null) }
+    val mergedSegments = (manualSegments + detectedSegments.filter { detected ->
+        manualSegments.none { it.kind == detected.kind }
+    }).filter { SkipSegments.valid(it, durMs) }
     var dlSheet by remember { mutableStateOf(false) }
     var episodeDownload by remember { mutableStateOf<Episode?>(null) }
     var newestEpisodes by remember(req.item.id) { mutableStateOf(false) }
@@ -928,27 +937,26 @@ fun PlayerScreen(
 
     LaunchedEffect(speed) { exo.setPlaybackSpeed(speed) }
 
-    LaunchedEffect(posMs, autoSkip) {
-        if (autoSkip && isPlaying && skippedFor != ep.id &&
-            req.item.type != dev.lynx.streamhub.api.MediaType.MOVIE &&
-            durMs > 600_000L && posMs in 2000L..25000L
-        ) {
-            skippedFor = ep.id
-            exo.seekTo(posMs + 85_000L)
-            showHud("Intro skipped")
-        }
+    // Match once a prepared file has a stable duration. Episode/source changes cancel late results.
+    LaunchedEffect(skipIdentity, skipPrompts, durMs / 1000L, skipRetry, streamsFor) {
+        detectedSegments = emptyList(); promptSegment = null
+        if (!skipPrompts) { skipStatus = "Intro/outro prompts are off."; return@LaunchedEffect }
+        if (skipSource.isBlank() || durMs <= 0 || (req.localPath == null && streamsFor != ep.id)) return@LaunchedEffect
+        manualSegments = SkipMarkerStore.load(context, ep.id, skipSource, durMs)
+        delay(1000L)
+        skipStatus = "Looking for matching episode timestamps…"
+        val result = SkipRepository.fetch(req.item, ep.number, durMs, force = skipRetry > 0)
+        detectedSegments = result.segments
+        skipStatus = result.message
     }
 
-    LaunchedEffect(ep.id, posMs, controls, locked, page) {
-        if (!skipShown && controls && !locked && page.isEmpty() &&
-            req.item.type != dev.lynx.streamhub.api.MediaType.MOVIE &&
-            durMs > 600_000L && posMs in 3000L..240000L) {
-            skipShown = true
-            showSkip = true
-        }
+    LaunchedEffect(skipIdentity, posMs, isPlaying, locked, page, PlayerWindowState.inPip, skipPrompts, mergedSegments) {
+        promptSegment = skipGate.update(mergedSegments, posMs,
+            skipPrompts && isPlaying && !locked && !PlayerWindowState.inPip && page.isEmpty(),
+            android.os.SystemClock.elapsedRealtime())
     }
-    LaunchedEffect(showSkip) {
-        if (showSkip) { delay(3000L); showSkip = false }
+    LaunchedEffect(promptSegment, skipIdentity) {
+        if (promptSegment != null) { delay(3000L); promptSegment = null }
     }
 
     LaunchedEffect(hudStamp) {
@@ -1274,17 +1282,23 @@ fun PlayerScreen(
             }
         }
 
-        // Manual +85-second jump, not detected intro metadata. Show once per episode.
-        if (showSkip && controls && !locked && !inPip && page.isEmpty()) {
+        // Preserve the existing skip-button placement; only real matched end times are used.
+        val visibleSkip = promptSegment
+        if (visibleSkip != null && skipPrompts && isPlaying && !locked && !inPip && page.isEmpty() &&
+            visibleSkip.contains(posMs)) {
             Surface(color = Color(0xCC000000), shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.align(Alignment.BottomEnd)
                     .padding(end = 24.dp, bottom = if (full) 150.dp else 108.dp)) {
                 Row(Modifier.clickable {
-                    seekBy(85_000L); showSkip = false; showHud("+85s"); poke++
+                    if (visibleSkip.contains(exo.currentPosition)) {
+                        exo.seekTo(visibleSkip.endMs.coerceAtMost(durMs))
+                        showHud("${visibleSkip.label.replaceFirstChar { it.uppercase() }} skipped")
+                    }
+                    skipGate.dismiss(); promptSegment = null; poke++
                 }.padding(horizontal = 14.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Text("+85s", color = Color.White, fontSize = 13.sp)
-                    Icon(Icons.Outlined.FastForward, "Skip forward 85 seconds", tint = Color.White)
+                    Text("Skip ${visibleSkip.label}", color = Color.White, fontSize = 13.sp)
+                    Icon(Icons.Outlined.FastForward, "Skip ${visibleSkip.label}", tint = Color.White)
                 }
             }
         }
@@ -1428,6 +1442,7 @@ fun PlayerScreen(
                                     "episodes" -> "Episodes"
                                     "related" -> "More like this"
                                     "substyle" -> "Subtitle style"
+                                    "skip" -> "Intro / outro"
                                     "output" -> "Audio output"
                                     else -> "Settings"
                                 },
@@ -1493,9 +1508,9 @@ fun PlayerScreen(
                                         }
                                     }
                                     item {
-                                        SheetSwitchRow("Auto Skip", autoSkip) {
-                                            autoSkip = it
-                                            PlayerPrefs.autoSkip = it
+                                        SheetSwitchRow("Intro / outro prompts", skipPrompts) {
+                                            skipPrompts = it
+                                            PlayerPrefs.skipPrompts = it
                                         }
                                     }
                                     item {
@@ -1504,6 +1519,7 @@ fun PlayerScreen(
                                             PlayerPrefs.autoNext = it
                                         }
                                     }
+                                    item { OptionRow("Intro / outro", "Matched timestamps · 3-second skip button") { page = "skip" } }
                                     item { OptionRow("Subtitle style", "Font, size, position") { page = "substyle" } }
                                     item {
                                         OptionRow("Load subtitle file", "srt, vtt, ass") {
@@ -1516,6 +1532,49 @@ fun PlayerScreen(
                                             OptionRow("Episodes", "${episodes.size} total") { page = "episodes" }
                                         }
                                     }
+                                }
+
+                                "skip" -> {
+                                    item { SheetSwitchRow("Intro / outro prompts", skipPrompts) {
+                                        skipPrompts = it; PlayerPrefs.skipPrompts = it
+                                    } }
+                                    item { Text(skipStatus, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(16.dp)) }
+                                    item { Text("Prompts never seek automatically. Matching uses AniList/AniSkip title, episode and file length, not video analysis. No match means no guessed jump. Movies and other series can use exact markers below.",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+                                    item { OptionRow("Retry matching", "Reload timestamps for this video") { skipRetry++ } }
+                                    mergedSegments.forEach { segment ->
+                                        item { OptionRow("${segment.label.replaceFirstChar { it.uppercase() }} · ${fmt(segment.startMs)} – ${fmt(segment.endMs)}",
+                                            "Preview skip button at segment start") {
+                                            page = ""; exo.seekTo(segment.startMs)
+                                            skipGate.allowPreview(segment.key)
+                                        } }
+                                    }
+                                    item { Text("Your markers · this episode/file only", fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(16.dp)) }
+                                    listOf("op" to "intro", "ed" to "outro").forEach { (kind, label) ->
+                                        item { OptionRow("Mark $label start here", "Current position: ${fmt(posMs)}") {
+                                            markerStart = kind to exo.currentPosition
+                                            showHud("$label start marked")
+                                        } }
+                                        item { OptionRow("Mark $label end here", markerStart?.takeIf { it.first == kind }
+                                            ?.let { "Start: ${fmt(it.second)} · end: ${fmt(posMs)}" } ?: "Mark its start first, then seek/play to its end") {
+                                            val start = markerStart?.takeIf { it.first == kind }?.second
+                                            val segment = start?.let { SkipSegment(kind, it, exo.currentPosition) }
+                                            if (segment != null && SkipSegments.valid(segment, durMs) && skipSource.isNotBlank()) {
+                                                manualSegments = manualSegments.filterNot { it.kind == kind } + segment
+                                                SkipMarkerStore.save(context, ep.id, skipSource, manualSegments, durMs)
+                                                skipGate.allowPreview(segment.key)
+                                                markerStart = null; showHud("$label markers saved")
+                                            } else showHud("Choose a valid start before the end")
+                                        } }
+                                    }
+                                    item { OptionRow("Clear your markers", "Community timestamps are not deleted") {
+                                        manualSegments = emptyList(); markerStart = null
+                                        SkipMarkerStore.save(context, ep.id, skipSource, emptyList(), durMs)
+                                        promptSegment = null
+                                        showHud("Your markers cleared")
+                                    } }
                                 }
 
                                 "substyle" -> {

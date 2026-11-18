@@ -91,7 +91,7 @@ fun PlayerSettingsScreen(onBack: () -> Unit) {
     var audio by remember { mutableStateOf(PlayerPrefs.audioLang) }
     var sub by remember { mutableStateOf(PlayerPrefs.subLang) }
     var auto by remember { mutableStateOf(PlayerPrefs.autoNext) }
-    var skip by remember { mutableStateOf(PlayerPrefs.autoSkip) }
+    var skip by remember { mutableStateOf(PlayerPrefs.skipPrompts) }
     var font by remember { mutableStateOf(PlayerPrefs.subFont) }
     var bold by remember { mutableStateOf(PlayerPrefs.subBold) }
     var scale by remember { mutableStateOf(PlayerPrefs.subScale) }
@@ -124,9 +124,9 @@ fun PlayerSettingsScreen(onBack: () -> Unit) {
         PlaybackSwitch(Icons.Filled.SkipNext, "Auto Next", "Play the next available episode after the countdown.", auto) {
             auto = it; PlayerPrefs.autoNext = it
         }
-        PlaybackSwitch(Icons.Filled.FastForward, "Auto Skip",
-            "Approximate only: skips a fixed 85 seconds, not detected intro timestamps.", skip) {
-            skip = it; PlayerPrefs.autoSkip = it
+        PlaybackSwitch(Icons.Filled.FastForward, "Intro / outro prompts",
+            "Show a 3-second button for matched timestamps. Never skips without your tap.", skip) {
+            skip = it; PlayerPrefs.skipPrompts = it
         }
         Text("Subtitle style", style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 16.dp))
