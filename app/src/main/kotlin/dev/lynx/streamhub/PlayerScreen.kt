@@ -483,9 +483,33 @@ fun PlayerScreen(
         }
     }
 
+    fun playbackCatalog() = if(req.localPath == null) PlaybackChoices.catalog(streams, verifiedSources) else emptyList()
+    fun playingLanguage(): String {
+        val actual=trackOpts(tracks,C.TRACK_TYPE_AUDIO).firstOrNull { it.selected }?.lang
+        audioLanguageCode(actual)?.let { return it }
+        val choices=playbackCatalog().filter { it.index==sourceIdx }
+        return choices.firstOrNull { it.language==preferredAudioKey(AppPrefs.audio(req.item.id)) }?.language
+            ?: choices.firstOrNull()?.language ?: "original"
+    }
+    fun changePlaybackSource(index: Int, language: String, height: Int) {
+        pendingStart=exo.currentPosition.coerceAtLeast(0L)
+        tracks=Tracks.EMPTY
+        qualityH=height
+        PlayerPrefs.lockedHeight=if(lockQuality)height else -1
+        AppPrefs.setAudio(req.item.id,language)
+        tweak { it.clearOverridesOfType(C.TRACK_TYPE_AUDIO).clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+            .clearVideoSizeConstraints().setPreferredAudioLanguage(if(language=="original")null else language) }
+        error=null;sourceIdx=index;page=""
+    }
     fun pickResolution(height: Int) {
         val available = trackOpts(tracks, C.TRACK_TYPE_VIDEO).map { it.height }.filter { it > 0 }.distinct()
-        if (height > 0 && height !in available) { showHud("That resolution is not reported by this source"); return }
+        if (height > 0 && height !in available) {
+            val language=playingLanguage()
+            val choice=PlaybackChoices.choose(playbackCatalog(),language,height,sourceIdx)
+            if(choice==null){showHud("No verified source has this resolution for the selected audio");return}
+            changePlaybackSource(choice.index,language,height)
+            return
+        }
         error = null
         setQuality(height)
         if (error == null) syncPlayback()
@@ -496,10 +520,11 @@ fun PlayerScreen(
         val current = streams.getOrNull(sourceIdx) ?: return false
         failedSourceUrls = failedSourceUrls + current.url
         val meta = streamChoice(current)
+        val compatible = playbackCatalog().filter {
+            it.language == playingLanguage() && (!lockQuality || qualityH <= 0 || qualityH in it.heights)
+        }.map { it.index }.toSet()
         val remaining = streams.indices.filter {
-            streams[it].url !in failedSourceUrls && verifiedSources[streams[it].url]?.complete == true &&
-                (!lockQuality || qualityH <= 0 || qualityH in verifiedSources[streams[it].url]!!.heights) &&
-                streamChoice(streams[it]).audioKey == meta.audioKey
+            streams[it].url !in failedSourceUrls && it in compatible
         }
         val next = remaining.minByOrNull {
             kotlin.math.abs((streamChoice(streams[it]).height ?: 0) - (meta.height ?: 0))
@@ -756,14 +781,15 @@ fun PlayerScreen(
                 probeSlots.acquire()
                 try {
                     val previous = verifiedSources[streams.getOrNull(sourceIdx)?.url]
-                    // Once a complete source exists, do not waste bandwidth probing every labelled child.
-                    if (previous?.complete == true && streamChoice(stream).height != null) return@launch
+                    // A labelled file may contain another language/resolution. Verify it too.
                     val result = VerifiedStreams.inspect(context, stream)
                     verifiedSources = verifiedSources + (stream.url to result)
                     val adaptiveUpgrade = previous?.complete == true && previous.heights.size <= 1 &&
                         result.heights.size > 1 && exo.currentPosition < 15_000L
                     val retainsLockedQuality = !lockQuality || qualityH <= 0 || qualityH in result.heights
-                    if (result.complete && (previous?.complete != true || (adaptiveUpgrade && retainsLockedQuality))) {
+                    val resultLanguages=PlaybackChoices.catalog(listOf(stream),mapOf(stream.url to result)).map { it.language }
+                    val retainsAudio=playingLanguage() in resultLanguages
+                    if (result.complete && (previous?.complete != true || (adaptiveUpgrade && retainsLockedQuality && retainsAudio))) {
                         pendingStart = exo.currentPosition.coerceAtLeast(0L)
                         sourceIdx = streams.indexOfFirst { it.url == stream.url }.coerceAtLeast(0)
                         error = null
@@ -1056,15 +1082,31 @@ fun PlayerScreen(
         }
         return listOfNotNull(language,channels,codec).joinToString(" · ")
     }
-    // Only tracks from the prepared source are language choices. Provider names are hints only.
-    val audioActions = audioOpts.map { option ->
-        AudioAction(if (audioOpts.size == 1) "Original" else audioOptionLabel(option), option.selected) {
-            pickAudio(option); page = ""
+    val playbackChoices=playbackCatalog()
+    val selectedLanguage=playingLanguage()
+    val availableLanguages=(playbackChoices.map { it.language } + audioOpts.map {
+        audioLanguageCode(it.lang) ?: selectedLanguage
+    }).distinct()
+    val audioActions = if(availableLanguages.size<=1) audioOpts.map { option ->
+        AudioAction(if(audioOpts.size==1)"Original" else audioOptionLabel(option),option.selected){pickAudio(option);page=""}
+    }.groupBy { it.label }.values.map { rows -> rows.firstOrNull { it.selected } ?: rows.first() } else availableLanguages.map { language ->
+        AudioAction(audioLanguageName(language) ?: "Original",language==selectedLanguage) {
+            val native=audioOpts.firstOrNull { audioLanguageCode(it.lang)==language }
+            if(native!=null){pickAudio(native);page=""} else {
+                val target=PlaybackChoices.choose(playbackChoices,language,if(lockQuality)qualityH else -1,sourceIdx)
+                if(target==null)showHud("This audio is not available at the locked resolution")
+                else if(target.index==sourceIdx){
+                    tweak { it.clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                        .setPreferredAudioLanguage(if(language=="original")null else language) }
+                    AppPrefs.setAudio(req.item.id,language);page=""
+                } else changePlaybackSource(target.index,language,if(lockQuality)qualityH else -1)
+            }
         }
-    }.groupBy { it.label }.values.map { rows -> rows.firstOrNull { it.selected } ?: rows.first() }
+    }
     val currentAudioLabel = audioActions.firstOrNull { it.selected }?.label ?: if (discovering) "Checking…" else "Unavailable"
     val adaptiveHeights = videoOpts.map { it.height }.filter { it > 0 }.distinct()
-    val qualities = adaptiveHeights.sortedDescending()
+    val qualities = (adaptiveHeights + playbackChoices.filter { it.language==selectedLanguage }.flatMap { it.heights })
+        .distinct().sortedDescending()
     val qualityLabel = when {
         qualityH > 0 -> "${qualityH}p"
         adaptiveHeights.size > 1 -> "Auto"
