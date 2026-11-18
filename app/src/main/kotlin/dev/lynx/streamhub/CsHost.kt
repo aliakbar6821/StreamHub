@@ -279,6 +279,7 @@ class CsExtension(private val api: MainAPI) : Extension {
         val lr = withTimeoutOrNull(40_000L) { api.load(url) } ?: throw Exception("Could not load details")
         var dubRaw: List<com.lagradost.cloudstream3.Episode> = emptyList()
         var audioNote = ""
+        var defaultAudio: String? = null
         val eps: List<com.lagradost.cloudstream3.Episode> = when (lr) {
             is TvSeriesLoadResponse -> lr.episodes
             is AnimeLoadResponse -> {
@@ -287,7 +288,12 @@ class CsExtension(private val api: MainAPI) : Extension {
                 audioNote = "Plugin " + api.name + ": Subbed " + (sub?.size ?: 0) + ", Dubbed " + (dub?.size ?: 0) +
                     (if (!sub.isNullOrEmpty() && !dub.isNullOrEmpty() && sub.map { it.data } == dub.map { it.data }) " (same links, dub may be inside the server list)" else "")
                 if (!sub.isNullOrEmpty() && !dub.isNullOrEmpty() && sub.map { it.data } != dub.map { it.data }) dubRaw = dub
-                sub ?: dub ?: lr.episodes.values.flatten()
+                if (isAnilightProvider(name)) defaultAudio = when {
+                    !sub.isNullOrEmpty() -> "original"
+                    !dub.isNullOrEmpty() -> "en"
+                    else -> null
+                }
+                sub?.takeIf { it.isNotEmpty() } ?: dub?.takeIf { it.isNotEmpty() } ?: lr.episodes.values.flatten()
             }
             else -> emptyList()
         }
@@ -307,6 +313,7 @@ class CsExtension(private val api: MainAPI) : Extension {
             lr is LiveStreamLoadResponse -> listOf(ShEpisode(lr.dataUrl, 1f, lr.name, lr.posterUrl))
             else -> emptyList()
         }
+        defaultAudio?.let { code -> episodes.forEach { AudioMetadataStore.rememberEpisode(this@CsExtension.id, it.id, code) } }
         notes[id] = audioNote
         if (dubRaw.isNotEmpty()) {
             dubs[id] = dubRaw.mapIndexed { i, e ->
@@ -315,6 +322,9 @@ class CsExtension(private val api: MainAPI) : Extension {
             }
         } else {
             dubs.remove(id)
+        }
+        if (isAnilightProvider(name)) dubs[id].orEmpty().forEach {
+            AudioMetadataStore.rememberEpisode(this@CsExtension.id, it.id, "en")
         }
         val t: TvType = lr.type
         MediaDetails(
@@ -369,7 +379,8 @@ class CsExtension(private val api: MainAPI) : Extension {
                             if (!ref.isNullOrBlank() && h.keys.none { it.equals("Referer", true) }) h["Referer"] = ref
                             val q = if (l.quality > 0) l.quality.toString() + "p" else null
                             count++
-                            onStream(ShStream(url = l.url, quality = listOfNotNull(l.name, q).joinToString(" "), headers = h))
+                            onStream(AudioMetadataStore.enrich(id, name, episodeId,
+                                ShStream(url = l.url, quality = listOfNotNull(l.name, q).joinToString(" "), headers = h)))
                         }
                     })
                 } catch (t: Throwable) {

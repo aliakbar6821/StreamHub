@@ -45,7 +45,7 @@ fun DownloadSheet(
     var searching by remember(ep.id) { mutableStateOf(true) }
     var preparing by remember(ep.id) { mutableIntStateOf(0) }
     var warnings by remember(ep.id) { mutableStateOf<List<String>>(emptyList()) }
-    var language by remember(ep.id) { mutableStateOf(audioLanguageCode(AppPrefs.audio(media.id)).orEmpty()) }
+    var language by remember(ep.id) { mutableStateOf(preferredAudioKey(AppPrefs.audio(media.id)).orEmpty()) }
     var selectedHeight by remember(ep.id) { mutableStateOf<Int?>(null) }
     var refresh by remember(ep.id) { mutableIntStateOf(0) }
     var initialized by remember(ep.id) { mutableStateOf(false) }
@@ -61,7 +61,8 @@ fun DownloadSheet(
         warnings = emptyList()
         val seen = HashSet<String>()
         val discovered = mutableListOf<Stream>()
-        fun accept(stream: Stream) {
+        fun accept(raw: Stream) {
+            val stream = if (ext != null) AudioMetadataStore.enrich(ext.id, ext.name, ep.id, raw) else raw
             if (!seen.add(stream.url)) return
             discovered.add(stream)
             ext?.id?.let { StreamChoiceCache.put(it, ep.id, discovered) }
@@ -120,7 +121,7 @@ fun DownloadSheet(
     val languages = exactOptions.map { streamChoice(it) }.distinctBy { it.audioKey }
     LaunchedEffect(busy, qualityChosen, options) {
         if (qualityChosen && !initialized && languages.isNotEmpty()) {
-            val wanted = audioLanguageCode(AppPrefs.audio(media.id))
+            val wanted = preferredAudioKey(AppPrefs.audio(media.id))
             language = languages.firstOrNull { it.audioKey == wanted }?.audioKey
                 ?: languages.first().audioKey
             initialized = true
@@ -174,7 +175,7 @@ fun DownloadSheet(
                     modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     languages.forEach { choice ->
-                        PillChip(choice.audioLabel, initialized && language == choice.audioKey) {
+                        PillChip(if (languages.size == 1) "Original" else choice.audioLabel, initialized && language == choice.audioKey) {
                             language = choice.audioKey
                             initialized = true
                         }

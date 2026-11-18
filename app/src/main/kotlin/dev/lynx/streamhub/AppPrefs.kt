@@ -14,6 +14,7 @@ object AppPrefs {
     var knownServers by mutableStateOf<List<String>>(emptyList())
     var setupStatus by mutableStateOf("")
     fun init(context: Context) {
+        AudioMetadataStore.init(context)
         if (prefs != null) return
         val p = context.applicationContext.getSharedPreferences("streamhub_ui", Context.MODE_PRIVATE)
         prefs = p

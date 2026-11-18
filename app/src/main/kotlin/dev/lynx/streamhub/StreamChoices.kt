@@ -11,8 +11,8 @@ import java.util.concurrent.ConcurrentHashMap
 /** These fields describe variants from one provider, not different providers. */
 data class StreamChoice(val language: String?, val height: Int?, val codec: String?) {
     val audioKey: String get() = language ?: ""
-    val audioLabel: String get() = if (language == "original") "Original · language unspecified"
-        else audioLanguageName(language) ?: "Language not provided"
+    val audioLabel: String get() = if (language == "original") "Original"
+        else audioLanguageName(language) ?: "Original"
 }
 
 private val audioNames = linkedMapOf(
@@ -138,9 +138,22 @@ fun sourceAudioVersion(stream: Stream?): Boolean? {
     return when { dubbed && !subbed -> true; subbed && !dubbed -> false; else -> null }
 }
 
-fun untaggedAudioLabel(version: Boolean?, count: Int, index: Int): String = when {
-    count > 1 -> "Audio track ${index + 1} · language unverified"
-    version == false -> "Original audio · language unverified"
-    version == true -> "Dubbed audio · language unverified"
-    else -> "Audio · language unverified"
+fun untaggedAudioLabel(version: Boolean?, count: Int, index: Int): String =
+    if (count <= 1 || index == 0) "Original" else if (index == 1) "Other" else "Other $index"
+
+/** Anilight's English dub mapping is provider-specific, never inferred for other providers. */
+fun isAnilightProvider(name: String): Boolean = providerDisplayName(name).equals("Anilight", true)
+fun providerAudioCode(provider: String, stream: Stream, episodeCode: String? = null): String? {
+    streamChoice(stream).language?.let { return it }
+    if (!isAnilightProvider(provider)) return null
+    val label = stream.quality.orEmpty()
+    return when {
+        sourceAudioVersion(stream) == false -> "original"
+        sourceAudioVersion(stream) == true -> "en"
+        Regex("(?i)\\bmegadub\\b").containsMatchIn(label) -> "en"
+        else -> episodeCode
+    }
 }
+
+fun preferredAudioKey(value: String?): String? =
+    if (value.equals("original", true)) "original" else audioLanguageCode(value)

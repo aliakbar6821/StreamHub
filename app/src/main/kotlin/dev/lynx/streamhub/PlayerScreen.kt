@@ -149,6 +149,8 @@ private fun langName(code: String?): String? {
     return n.replaceFirstChar { it.uppercase() }
 }
 
+private data class AudioAction(val label: String, val selected: Boolean, val run: () -> Unit)
+
 private fun trackOpts(tracks: Tracks, type: Int): List<TrackOpt> {
     val out = mutableListOf<TrackOpt>()
     for (g in tracks.groups) {
@@ -486,10 +488,9 @@ fun PlayerScreen(
     fun pickLanguage(code: String) {
         val current = streams.getOrNull(sourceIdx)?.let { streamChoice(it) }
         val index = bestStreamIndex(streams, code, current?.height, current?.codec) ?: return
-        if (code != "original" && code.isNotBlank()) {
-            AppPrefs.setAudio(req.item.id, code)
-            tweak { it.setPreferredAudioLanguage(code) }
-        }
+        AppPrefs.setAudio(req.item.id, code.ifBlank { "original" })
+        if (code != "original" && code.isNotBlank()) tweak { it.setPreferredAudioLanguage(code) }
+        else tweak { it.setPreferredAudioLanguage(null) }
         pickVariant(index)
     }
 
@@ -950,7 +951,7 @@ fun PlayerScreen(
     LaunchedEffect(streams.map { it.url }, ep.id) {
         val source = req.ext?.id
         if (source != null && streamsFor == ep.id) StreamChoiceCache.put(source, ep.id, streams)
-        val wanted = audioLanguageCode(AppPrefs.audio(req.item.id))
+        val wanted = preferredAudioKey(AppPrefs.audio(req.item.id))
         if (!preferredAudioApplied && wanted != null) {
             val index = bestStreamIndex(streams, wanted, null)
             if (index != null) {
@@ -1006,18 +1007,46 @@ fun PlayerScreen(
     val externalRows = externalAudio.filter {
         it.audioKey !in embeddedCodes && !(it.audioKey == currentChoice?.audioKey && audioOpts.size == 1)
     }
-    val selectedVersion = sourceAudioVersion(streams.getOrNull(sourceIdx))
-        ?: if (dubList.isNotEmpty()) dubOn else null
-    fun audioOptionLabel(option: TrackOpt): String {
-        audioLanguageName(option.lang)?.let { return it }
-        if (audioOpts.size == 1) currentChoice?.takeIf { it.language != null }?.let { return it.audioLabel }
-        if (option.label.startsWith("Audio ") && option.label.endsWith("language not provided")) {
-            return untaggedAudioLabel(selectedVersion, audioOpts.size, audioOpts.indexOf(option))
-        }
-        return option.label
+    val selectedVersion = when {
+        currentChoice?.language == "original" -> false
+        isAnilightProvider(providerName) && currentChoice?.language == "en" -> true
+        else -> sourceAudioVersion(streams.getOrNull(sourceIdx))
+            ?: if (dubList.isNotEmpty()) dubOn else null
     }
-    val currentAudioLabel = audioOpts.firstOrNull { it.selected }?.let { audioOptionLabel(it) }
-        ?: currentChoice?.takeIf { it.language != null }?.audioLabel ?: "Audio · language unverified"
+    fun audioOptionLabel(option: TrackOpt): String {
+        if (audioOpts.size == 1 && (selectedVersion == false || currentChoice?.language == "original")) return "Original"
+        audioLanguageName(option.lang)?.let { return it }
+        audioLanguageName(option.label)?.let { return it }
+        if (audioOpts.size == 1) {
+            currentChoice?.takeIf { it.language != null }?.let { return it.audioLabel }
+            if (hasDubChoice && selectedVersion == true) return if (isAnilightProvider(providerName)) "English" else "Other"
+        }
+        return untaggedAudioLabel(selectedVersion, audioOpts.size, audioOpts.indexOf(option))
+    }
+    val audioActionsRaw = buildList<AudioAction> {
+        audioOpts.forEach { option ->
+            val label = if (audioOpts.size == 1 &&
+                (selectedVersion == false || currentChoice?.language == "original")) "Original"
+                else audioOptionLabel(option)
+            add(AudioAction(label, option.selected) { pickAudio(option); page = "" })
+        }
+        externalRows.forEach { choice ->
+            add(AudioAction(choice.audioLabel, choice.audioKey == currentChoice?.audioKey) { pickLanguage(choice.audioKey) })
+        }
+        if (hasDubChoice) {
+            add(AudioAction("Original", selectedVersion == false) {
+                AppPrefs.setAudio(req.item.id, "original"); setDub(false)
+            })
+            val alternate = if (isAnilightProvider(providerName)) "English" else "Other"
+            add(AudioAction(alternate, selectedVersion == true) {
+                if (alternate == "English") AppPrefs.setAudio(req.item.id, "en")
+                setDub(true)
+            })
+        }
+    }.groupBy { it.label }.values.map { rows -> rows.firstOrNull { it.selected } ?: rows.first() }
+    val audioActions = if (audioActionsRaw.size == 1)
+        listOf(audioActionsRaw.first().copy(label = "Original")) else audioActionsRaw
+    val currentAudioLabel = audioActions.firstOrNull { it.selected }?.label ?: "Original"
     val adaptiveHeights = videoOpts.map { it.height }.filter { it > 0 }.distinct()
     val externalHeights = streams.filter { streamChoice(it).audioKey == currentChoice?.audioKey.orEmpty() }
         .mapNotNull { streamChoice(it).height }
@@ -1358,7 +1387,6 @@ fun PlayerScreen(
                             Text(
                                 when (page) {
                                     "audio" -> "Audio"
-                                    "versions" -> "Source versions"
                                     "subs" -> "Subtitles"
                                     "quality" -> "Quality"
                                     "speed" -> "Playback speed"
@@ -1473,54 +1501,12 @@ fun PlayerScreen(
                                 }
 
                                 "audio" -> {
-                                    item { Text("Language names come from file or provider metadata, not speech detection. " +
-                                        "Original/Dubbed describes the selected source version; unverified means its language tag is missing.",
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(16.dp)) }
-                                    items(externalRows, key = { "file:" + it.audioKey }) { choice ->
-                                        OptionRow(choice.audioLabel,
-                                            selected = choice.audioKey == currentChoice?.audioKey) {
-                                            pickLanguage(choice.audioKey)
-                                        }
+                                    items(audioActions, key = { it.label }) { option ->
+                                        OptionRow(option.label, selected = option.selected) { option.run() }
                                     }
-                                    items(audioOpts) { o ->
-                                        val label = audioOptionLabel(o)
-                                        OptionRow(label, selected = o.selected) { pickAudio(o); page = "" }
-                                    }
-                                    if (audioOpts.isEmpty() && externalRows.isEmpty()) {
-                                        item { Text("No audio language information reported yet.",
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(20.dp)) }
-                                    }
-                                    if (discovering) {
-                                        item { Text("Finding more audio and quality options…",
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    if (audioActions.isEmpty() && discovering) {
+                                        item { Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.padding(16.dp)) }
-                                    }
-                                    if (hasDubChoice) {
-                                        item { OptionRow("Other audio versions", "From this provider") { page = "versions" } }
-                                    }
-                                }
-
-                                "versions" -> {
-                                    item {
-                                        Text(
-                                            "These are separate video sources, not verified " +
-                                                "audio languages. After switching, Audio " +
-                                                "shows the tracks reported by that stream.",
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(20.dp),
-                                        )
-                                    }
-                                    item {
-                                        OptionRow("Subbed source", selected = selectedVersion == false) {
-                                            setDub(false)
-                                        }
-                                    }
-                                    item {
-                                        OptionRow("Dubbed source", selected = selectedVersion == true) {
-                                            setDub(true)
-                                        }
                                     }
                                 }
 
