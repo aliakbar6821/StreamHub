@@ -135,11 +135,12 @@ object CsHost {
                 try {
                     require(temporary.renameTo(target)) { "Cannot publish downloaded plugin" }
                     require(target.setReadOnly()) { "Cannot protect plugin code" }
-                    if (!alreadyLoaded) {
+                    if (!alreadyLoaded && AppPrefs.extensionEnabled(e.pkg)) {
                         progress("Loading ${e.name}…")
                         require(loadPlugin(app, target)) { "Plugin could not be loaded: ${lastLoadError ?: "check device logs"}" }
                     }
                     prefs(app).edit().putLong(k, e.version).apply()
+                    app.getSharedPreferences("cs3_labels", Context.MODE_PRIVATE).edit().putString(k, e.name).apply()
                     previous.delete()
                 } catch (t: Throwable) {
                     target.delete()
@@ -189,12 +190,24 @@ object CsHost {
         }
     }
 
+    fun installed(c: Context): List<InstalledExtension> = dir(c).listFiles().orEmpty()
+        .filter { it.extension == "cs3" }.map { f ->
+            val key = f.nameWithoutExtension
+            val label = c.getSharedPreferences("cs3_labels", Context.MODE_PRIVATE).getString(key, null)
+                ?: providerDisplayName(key)
+            InstalledExtension("cs3:$key", providerDisplayName(label), prefs(c).getLong(key, 1L))
+        }
+
     @Synchronized
     fun extensions(c: Context): List<Extension> {
         val app = c.applicationContext
         CloudStreamApp.setContext(app)
-        dir(app).listFiles()?.filter { it.extension == "cs3" }?.forEach { loadPlugin(app, it) }
-        if (!fired) {
+        val before = loaded.size
+        val activeFiles = dir(app).listFiles().orEmpty().filter {
+            it.extension == "cs3" && AppPrefs.extensionEnabled("cs3:${it.nameWithoutExtension}")
+        }
+        activeFiles.forEach { loadPlugin(app, it) }
+        if (activeFiles.isNotEmpty() && (!fired || loaded.size != before)) {
             fired = true
             runCatching {
                 com.lagradost.cloudstream3.MainActivity.mainPluginsLoadedEvent(true)
@@ -206,9 +219,10 @@ object CsHost {
             .filter { provider ->
                 val source = provider.sourcePlugin
                 source != null && !provider.supportedTypes.contains(TvType.NSFW) &&
-                    (if (source in DefaultSources.ids) AppPrefs.defaultsEnabled else AppPrefs.extraExtensions)
+                    AppPrefs.extensionEnabled("cs3:$source") && installedVersion(app, "cs3:$source") != null
             }
-            .map { api -> adapters.getOrPut(api) { CsExtension(api) } }
+            .map { api -> adapters.getOrPut(api) { CsExtension(api,
+                (installedVersion(app, "cs3:${api.sourcePlugin}") ?: 1L).toInt()) } }
     }
 }
 
@@ -218,20 +232,16 @@ private fun TvType?.toMediaType(): MediaType = when (this) {
     else -> MediaType.SERIES
 }
 
-class CsExtension(private val api: MainAPI) : Extension {
+class CsExtension(private val api: MainAPI, override val version: Int = 1) : Extension {
     override val id = "cs3:" + api.name
     override val name = api.name
-    override val version = 1
+    val activationId: String get() = "cs3:" + (api.sourcePlugin ?: api.name)
+    private fun requireEnabled() { check(AppPrefs.extensionEnabled(activationId)) { "Enable $name in Sources & extensions" } }
 
     private val dubs = java.util.concurrent.ConcurrentHashMap<String, List<ShEpisode>>()
 
     /** Dubbed episodes for a title, or empty when the plugin has no separate dub list. */
     fun dubEpisodes(id: String): List<ShEpisode> = dubs[id] ?: emptyList()
-
-    private val notes = java.util.concurrent.ConcurrentHashMap<String, String>()
-
-    /** One line describing what the plugin returned for audio (shown on the Details Home tab). */
-    fun audioNote(id: String): String = notes[id] ?: ""
 
     private fun SearchResponse.toItem(): MediaItem {
         val t: TvType? = this.type
@@ -244,6 +254,7 @@ class CsExtension(private val api: MainAPI) : Extension {
     }
 
     override suspend fun getHome(): List<HomeSection> = coroutineScope {
+        requireEnabled()
         api.mainPage.take(6).map { mp ->
             async(Dispatchers.IO) {
                 withTimeoutOrNull(12_000L) {
@@ -257,6 +268,7 @@ class CsExtension(private val api: MainAPI) : Extension {
     }
 
     override suspend fun search(query: String, page: Int): List<MediaItem> = withContext(Dispatchers.IO) {
+        requireEnabled()
         var err: String? = null
         val res = withTimeoutOrNull(12_000L) {
             runCatching { api.search(query) }.onFailure { err = describe(it) }.getOrNull()
@@ -275,18 +287,16 @@ class CsExtension(private val api: MainAPI) : Extension {
     }
 
     override suspend fun getDetails(id: String): MediaDetails = withContext(Dispatchers.IO) {
+        requireEnabled()
         val url = id.split("|", limit = 3).getOrNull(2) ?: id
         val lr = withTimeoutOrNull(40_000L) { api.load(url) } ?: throw Exception("Could not load details")
         var dubRaw: List<com.lagradost.cloudstream3.Episode> = emptyList()
-        var audioNote = ""
         var defaultAudio: String? = null
         val eps: List<com.lagradost.cloudstream3.Episode> = when (lr) {
             is TvSeriesLoadResponse -> lr.episodes
             is AnimeLoadResponse -> {
                 val sub = lr.episodes[DubStatus.Subbed]
                 val dub = lr.episodes[DubStatus.Dubbed]
-                audioNote = "Plugin " + api.name + ": Subbed " + (sub?.size ?: 0) + ", Dubbed " + (dub?.size ?: 0) +
-                    (if (!sub.isNullOrEmpty() && !dub.isNullOrEmpty() && sub.map { it.data } == dub.map { it.data }) " (same links, dub may be inside the server list)" else "")
                 if (!sub.isNullOrEmpty() && !dub.isNullOrEmpty() && sub.map { it.data } != dub.map { it.data }) dubRaw = dub
                 if (isAnilightProvider(name)) defaultAudio = when {
                     !sub.isNullOrEmpty() -> "original"
@@ -314,7 +324,6 @@ class CsExtension(private val api: MainAPI) : Extension {
             else -> emptyList()
         }
         defaultAudio?.let { code -> episodes.forEach { AudioMetadataStore.rememberEpisode(this@CsExtension.id, it.id, code) } }
-        notes[id] = audioNote
         if (dubRaw.isNotEmpty()) {
             dubs[id] = dubRaw.mapIndexed { i, e ->
                 val label = e.name?.takeIf { it.isNotBlank() } ?: ("Episode " + (e.episode ?: (i + 1)))
@@ -360,6 +369,7 @@ class CsExtension(private val api: MainAPI) : Extension {
         onSubtitle: (String, String) -> Unit = { _, _ -> },
         onStream: (ShStream) -> Unit,
     ) {
+        requireEnabled()
         lastError = null
         var count = 0
         var finished = false

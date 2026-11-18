@@ -1,235 +1,231 @@
 package dev.lynx.streamhub
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+@Composable
+private fun ExtensionPanel(content: @Composable ColumnScope.() -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
+    }
+}
+
+@Composable
+private fun ExtensionToggle(entry: InstalledExtension, installed: Boolean, busy: Boolean, onToggle: (Boolean) -> Unit) {
+    ExtensionPanel {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(entry.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(if (!installed) "Not installed · downloads when enabled" else
+                    "v${entry.version} · " + if (AppPrefs.extensionEnabled(entry.key)) "Enabled" else "Disabled",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = AppPrefs.extensionEnabled(entry.key), onCheckedChange = onToggle, enabled = !busy)
+        }
+    }
+}
 
 @Composable
 fun ExtensionsScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var installed by remember { mutableStateOf<List<InstalledExtension>>(emptyList()) }
     var repoInput by remember { mutableStateOf("") }
     var refresh by remember { mutableIntStateOf(0) }
     var status by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf<String?>(null) }
     var available by remember { mutableStateOf<Map<String, List<RepoExt>>>(emptyMap()) }
     var errors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    val repositories = Store.repos.toList()
+    val defaults = listOf(InstalledExtension("cs3:MovieBoxProvider", "MovieBox", 0),
+        InstalledExtension("cs3:Anilight", "Anilight", 0))
 
-    LaunchedEffect(Store.repos.toList(), refresh, AppPrefs.extraExtensions) {
-        if (!AppPrefs.extraExtensions) {
-            available = emptyMap()
-            errors = emptyMap()
-            return@LaunchedEffect
+    suspend fun readInstalled() {
+        installed = withContext(Dispatchers.IO) { ExtensionLoader.installed(context) }
+    }
+    fun toggle(key: String, enabled: Boolean) {
+        if (busy != null) return
+        AppPrefs.setExtensionEnabled(key, enabled)
+        Session.invalidate()
+        busy = key
+        scope.launch {
+            try {
+                Session.reload(context)
+                readInstalled()
+                if (enabled && installed.none { it.key == key }) {
+                    val reason = Session.error.orEmpty()
+                    AppPrefs.setExtensionEnabled(key, false)
+                    Session.invalidate()
+                    status = "Could not install this extension. $reason".trim()
+                } else status = when {
+                    !enabled -> "Extension disabled; files and settings kept"
+                    Session.extensions.none { ExtensionLoader.activationId(it) == key } ->
+                        "Enabled, but this extension could not be loaded. Try updating it or restarting the app."
+                    else -> "Extension enabled"
+                }
+                refresh++
+            } catch (cancel: CancellationException) { throw cancel
+            } catch (t: Exception) { status = t.message ?: "Could not update extensions"
+            } finally { busy = null }
         }
+    }
+    LaunchedEffect(refresh) { readInstalled() }
+    LaunchedEffect(repositories, refresh, AppPrefs.extraExtensions) {
+        available = emptyMap(); errors = emptyMap()
+        if (!AppPrefs.extraExtensions) return@LaunchedEffect
         val ok = mutableMapOf<String, List<RepoExt>>()
         val bad = mutableMapOf<String, String>()
-        for (r in Store.repos.toList()) {
-            try {
-                ok[r] = Repos.fetch(r)
-            } catch (t: Throwable) {
-                bad[r] = t.message ?: "Failed to load repository"
-            }
+        for (repo in repositories) {
+            try { ok[repo] = Repos.fetch(repo)
+            } catch (cancel: CancellationException) { throw cancel
+            } catch (t: Exception) { bad[repo] = t.message ?: "Could not load repository" }
         }
-        available = ok
-        errors = bad
+        available = ok; errors = bad
     }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-    ) {
-        Text("Sources & extensions", style = MaterialTheme.typography.headlineMedium)
-        Text("Default sources", style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
-        Text("MovieBox · movies and series\nAnilight · anime",
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("On first use, StreamHub downloads executable plugins from the configured Phisher repository. " +
-            "Internet is required. Plugins are third-party code; availability and playback are not guaranteed.",
-            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 10.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Enable default sources", modifier = Modifier.weight(1f))
-            Switch(AppPrefs.defaultsEnabled, { enabled ->
-                AppPrefs.defaultsEnabled = enabled; AppPrefs.save()
-                scope.launch { Session.reload(context) }
-            })
-        }
-        AppPrefs.setupStatus.takeIf { it.isNotBlank() }?.let { Text(it) }
-        TextButton(onClick = { scope.launch { Session.reload(context) } }) {
-            Text(if (Session.loading) "Working…" else "Set up / reload default sources")
-        }
-        Text("Additional CloudStream extensions", style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(top = 20.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Enable repositories and extra extensions", modifier = Modifier.weight(1f))
-            Switch(AppPrefs.extraExtensions, { enabled ->
-                AppPrefs.extraExtensions = enabled; AppPrefs.save()
-                scope.launch { Session.reload(context) }
-            })
-        }
-        Spacer(Modifier.height(16.dp))
-
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clickable { scope.launch { Session.reload(context) } }
-                .padding(vertical = 12.dp),
-        ) {
-            Text("Reload extensions", style = MaterialTheme.typography.titleMedium)
-            Text(
-                if (Session.loading) "Reloading..." else "${Session.extensions.size} installed",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Hide adult-titled content", style = MaterialTheme.typography.titleMedium)
-                Text("Filters Home and Search by title", style = MaterialTheme.typography.bodySmall)
-            }
-            Switch(
-                checked = Safety.enabled,
-                onCheckedChange = {
-                    Safety.enabled = it
-                    Store.saveSafe()
-                },
-            )
-        }
-
-        Spacer(Modifier.height(8.dp))
-        Text("Installed extensions", style = MaterialTheme.typography.titleSmall)
-        if (Session.extensions.isEmpty()) {
-            Text("None", modifier = Modifier.padding(vertical = 8.dp))
-        }
-        Session.extensions.forEach { e ->
-            Text("${e.name} (v${e.version})", modifier = Modifier.padding(vertical = 6.dp))
-        }
-
-        if (AppPrefs.extraExtensions) {
-        Spacer(Modifier.height(24.dp))
-        Text("Repositories", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Paste a repository URL (a JSON index) to browse and install extensions.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = repoInput,
-            onValueChange = { repoInput = it },
-            label = { Text("Repository URL") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                val u = repoInput.trim()
-                if (u.startsWith("http")) {
-                    Store.addRepo(u)
-                    repoInput = ""
-                }
-            }) { Text("Add repository") }
-            TextButton(onClick = { refresh++ }) { Text("Refresh") }
-        }
-        status?.let {
-            Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 8.dp))
-        }
-
-        Store.repos.toList().forEach { r ->
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    r,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { Store.removeRepo(r) }) { Text("Remove") }
-            }
-            errors[r]?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            }
-            available[r]?.forEach { e ->
-                val installed = remember(refresh, busy) { if (e.pkg.startsWith("cs3:")) CsHost.installedVersion(context, e.pkg) else Repos.installedVersion(context, e.pkg) }
-                val label = when {
-                    installed == null -> "Install"
-                    installed < e.version -> "Update"
-                    else -> "Installed"
-                }
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(e.name, style = MaterialTheme.typography.titleSmall)
-                        Text(if (e.pkg.startsWith("cs3:")) "CloudStream plugin \u00b7 v${e.version}" else "v${e.version}", style = MaterialTheme.typography.bodySmall)
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { Text("Sources & extensions", style = MaterialTheme.typography.headlineMedium) }
+        item {
+            ExtensionPanel {
+                Text("Appearance", style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("system", "light", "dark").forEach { mode ->
+                        PillChip(mode.replaceFirstChar { it.uppercase() }, AppPrefs.appearance == mode) {
+                            AppPrefs.appearance = mode; AppPrefs.save()
+                        }
                     }
-                    Button(
-                        enabled = busy == null && label != "Installed" && label != "Unsupported",
-                        onClick = {
-                            scope.launch {
-                                busy = e.pkg
-                                status = null
-                                try {
-                                    if (e.pkg.startsWith("cs3:")) {
-                                        CsHost.install(context, e) { phase ->
-                                            scope.launch { status = phase }
-                                        }
-                                        Session.refreshRegistry(context)
-                                    } else {
-                                        val f = Repos.download(context, e)
-                                        Repos.launchInstall(context, f)
-                                        status = "Confirm the install prompt, then tap Refresh and Reload extensions."
-                                    }
-                                } catch (cancel: kotlinx.coroutines.CancellationException) {
-                                    throw cancel
-                                } catch (t: Exception) {
-                                    status = "Install failed: ${t.message}"
-                                } finally {
-                                    busy = null
-                                }
-                            }
-                        },
-                    ) { Text(if (busy == e.pkg) "..." else label) }
                 }
             }
         }
+        item {
+            Text("Choose your sources", style = MaterialTheme.typography.titleLarge)
+            Text("Extensions start off. Enable only those you want to use. Enabling an uninstalled source downloads third-party executable code; internet is required.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Spacer(Modifier.height(32.dp))
+        items(defaults, key = { "default:${it.key}" }) { fallback ->
+            val entry = installed.firstOrNull { it.key == fallback.key } ?: fallback
+            ExtensionToggle(entry, installed.any { it.key == entry.key }, busy != null) { toggle(entry.key, it) }
+        }
+        val extraInstalled = installed.filter { entry -> defaults.none { it.key == entry.key } }
+        if (extraInstalled.isNotEmpty()) {
+            item { Text("Other installed extensions", style = MaterialTheme.typography.titleLarge) }
+            items(extraInstalled, key = { "installed:${it.key}" }) { entry ->
+                ExtensionToggle(entry, true, busy != null) { toggle(entry.key, it) }
+            }
+        }
+        item {
+            if (busy != null || AppPrefs.setupStatus.isNotBlank()) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text(AppPrefs.setupStatus.ifBlank { "Updating sources…" }, modifier = Modifier.padding(top = 8.dp))
+            }
+            status?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            Session.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            TextButton(enabled = busy == null, onClick = {
+                busy = "reload"; Session.invalidate()
+                scope.launch {
+                    try { Session.reload(context); readInstalled(); refresh++
+                    } catch (cancel: CancellationException) { throw cancel
+                    } catch (t: Exception) { status = t.message
+                    } finally { busy = null }
+                }
+            }) { Text("Reload enabled extensions") }
+        }
+        item {
+            ExtensionPanel {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Hide adult-titled content", style = MaterialTheme.typography.titleMedium)
+                        Text("Filters Home and Search by title", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(Safety.enabled, { Safety.enabled = it; Store.saveSafe() })
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Browse additional repositories", modifier = Modifier.weight(1f))
+                    Switch(AppPrefs.extraExtensions, { AppPrefs.extraExtensions = it; AppPrefs.save() })
+                }
+            }
+        }
+        if (AppPrefs.extraExtensions) {
+            item {
+                ExtensionPanel {
+                    Text("Repositories", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(repoInput, { repoInput = it }, label = { Text("Repository URL") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            val url = repoInput.trim()
+                            if (url.startsWith("https://")) { Store.addRepo(url); repoInput = "" }
+                            else status = "Use an HTTPS repository URL"
+                        }) { Text("Add") }
+                        TextButton(onClick = { refresh++ }) { Text("Refresh") }
+                    }
+                }
+            }
+            repositories.forEach { repo ->
+                item(key = "repo:$repo") {
+                    ExtensionPanel {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(repo, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = { Store.removeRepo(repo) }) { Text("Remove") }
+                        }
+                        errors[repo]?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+                items(available[repo].orEmpty(), key = { "repo:$repo:${it.pkg}" }) { entry ->
+                    val current = installed.firstOrNull { it.key == entry.pkg }
+                    ExtensionPanel {
+                        Text(entry.name, style = MaterialTheme.typography.titleMedium)
+                        Text("v${entry.version}", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (current != null) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(if (AppPrefs.extensionEnabled(entry.pkg)) "Enabled" else "Disabled", Modifier.weight(1f))
+                                Switch(AppPrefs.extensionEnabled(entry.pkg), { toggle(entry.pkg, it) }, enabled = busy == null)
+                            }
+                        }
+                        if (current == null || current.version < entry.version) {
+                            Button(enabled = busy == null, onClick = {
+                                busy = entry.pkg; status = null
+                                scope.launch {
+                                    try {
+                                        if (entry.pkg.startsWith("cs3:")) {
+                                            CsHost.install(context, entry)
+                                            Session.refreshRegistry(context)
+                                            status = "Installed. Enable it to use it. Updates to a loaded plugin may need an app restart."
+                                        } else {
+                                            val file = Repos.download(context, entry)
+                                            Repos.launchInstall(context, file)
+                                            status = "Complete Android's installation prompt, then refresh here."
+                                        }
+                                        readInstalled(); refresh++
+                                    } catch (cancel: CancellationException) { throw cancel
+                                    } catch (t: Exception) { status = "Install failed: ${t.message}"
+                                    } finally { busy = null }
+                                }
+                            }) { Text(if (current == null) "Install (disabled)" else "Update") }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

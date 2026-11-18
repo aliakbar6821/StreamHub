@@ -15,11 +15,21 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 
 object Session {
+    private val reloadLock = Mutex()
+    private var revision = 0
+    val generation: Int get() = revision
+    fun invalidate() {
+        revision++
+        extensions = emptyList(); sections = emptyList(); results = emptyList()
+        owner.clear(); searched = false; loaded = false; error = null
+    }
     // item id -> extension that provided it
     val owner = ConcurrentHashMap<String, Extension>()
 
@@ -37,17 +47,20 @@ object Session {
 
     /** Installation must not wait for every source's Home requests. */
     suspend fun refreshRegistry(context: Context) {
-        val cs = withContext(Dispatchers.IO) { CsHost.extensions(context.applicationContext) }
-        extensions = extensions.filterNot { it.id.startsWith("cs3:") } + cs
-        loaded = false
+        invalidate()
+        val token = revision
+        val found = withContext(Dispatchers.IO) { ExtensionLoader.loadAll(context.applicationContext) }
+        if (token == revision) extensions = found.filter { ExtensionLoader.isEnabled(it) }
     }
 
-    suspend fun reload(context: Context) {
-        if (loading) return
+    suspend fun reload(context: Context) = reloadLock.withLock {
+        if (loaded) return@withLock
+        val token = revision
         loading = true
         try {
             val app = context.applicationContext
             val setupError = DefaultSources.ensure(app)
+            val ownership = mutableMapOf<String, Extension>()
             val result = withContext(Dispatchers.IO) {
                 val exts = ExtensionLoader.loadAll(app)
                 val all = mutableListOf<HomeSection>()
@@ -71,12 +84,14 @@ object Session {
                 }
                 for ((e, feed) in feeds) {
                     feed.onSuccess { sections ->
-                        sections.forEach { sec -> sec.items.forEach { owner[it.id] = e } }
+                        sections.forEach { sec -> sec.items.forEach { ownership[it.id] = e } }
                         all.addAll(sections)
                     }.onFailure { err = "${e.name}: ${it.message}" }
                 }
                 Triple(exts, all, err)
             }
+            if (token != revision) return@withLock
+            owner.putAll(ownership)
             extensions = result.first
             sections = result.second
             error = result.third

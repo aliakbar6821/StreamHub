@@ -39,12 +39,12 @@ private fun MenuRow(icon: ImageVector, label: String, value: String? = null, onC
 }
 
 @Composable
-fun YouScreen() {
+fun YouScreen(startAtExtensions: Boolean = false) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val prefs = remember { ctx.getSharedPreferences("profile", Context.MODE_PRIVATE) }
     var name by remember { mutableStateOf(prefs.getString("name", "StreamHub User") ?: "StreamHub User") }
-    var page by remember { mutableStateOf(0) }
+    var page by remember(startAtExtensions) { mutableStateOf(if (startAtExtensions) 1 else 0) }
     var edit by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
     var appearance by remember { mutableStateOf(false) }
@@ -100,7 +100,7 @@ fun YouScreen() {
         return
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
-        Text("StreamHub", style = MaterialTheme.typography.headlineLarge,
+        Text("streamHub", style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(vertical = 20.dp))
         Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(88.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
@@ -181,9 +181,7 @@ fun YouScreen() {
         }) { Text("Close app") } })
     message?.let { text -> AlertDialog(onDismissRequest = { message = null }, text = { Text(text) },
         confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } }) }
-    if (about) AlertDialog(onDismissRequest = { about = false }, title = { Text("StreamHub") },
-        text = { Text("YouTube-inspired media browser. Default plugins: MovieBoxProvider and Anilight, from the Phisher repository. " +
-            "Third-party sources are not affiliated with StreamHub. Plugin availability does not establish rights to any content. " +
-            "Additional CloudStream extensions are optional. StreamHub is not AniStation.") },
+    if (about) AlertDialog(onDismissRequest = { about = false }, title = { Text("streamHub") },
+        text = { Text("StreamHub is inspired from anistation") },
         confirmButton = { TextButton(onClick = { about = false }) { Text("OK") } })
 }

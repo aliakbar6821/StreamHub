@@ -12,8 +12,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 
-val NavBg = Color(0xFF16161D)
-
 /** Whole-app size. 1.0 = the old big layout, 0.82 = default, 0.72 = small. */
 object UiScale {
     var value by mutableFloatStateOf(0.82f)

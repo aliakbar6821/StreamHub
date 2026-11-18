@@ -67,6 +67,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 
 /** Rounded label used on cards: dark = filled primary, otherwise soft grey. */
 @Composable
@@ -130,7 +132,8 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
             Session.searched = true
             try {
                 if (Session.extensions.isEmpty()) Session.reload(context)
-                val exts = Session.extensions
+                val requestGeneration = Session.generation
+                val exts = Session.extensions.filter { ExtensionLoader.isEnabled(it) }
                 val acc = mutableListOf<MediaItem>()
                 val errs = mutableListOf<String>()
                 val rep = mutableListOf<String>()
@@ -140,14 +143,17 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
                         async(Dispatchers.IO) {
                             try {
                                 val r = e.search(term, 1)
-                                r.forEach { Session.owner[it.id] = e }
-                                synchronized(acc) {
-                                    acc.addAll(r)
-                                    Session.results = acc.toList()
-                                    rep.add(e.name + ": " + (if (r.isEmpty()) ((e as? CsExtension)?.lastSearchNote?.ifEmpty { null } ?: "no results") else r.size.toString()))
-                                    report = rep.joinToString("\n")
+                                withContext(Dispatchers.Main) {
+                                    if (requestGeneration == Session.generation && ExtensionLoader.isEnabled(e)) {
+                                        r.forEach { Session.owner[it.id] = e }
+                                        acc.addAll(r)
+                                        Session.results = acc.toList()
+                                        rep.add(e.name + ": " + (if (r.isEmpty()) ((e as? CsExtension)?.lastSearchNote?.ifEmpty { null } ?: "no results") else r.size.toString()))
+                                        report = rep.joinToString("\n")
+                                    }
                                 }
-                            } catch (t: Throwable) {
+                            } catch (cancel: CancellationException) { throw cancel
+                            } catch (t: Exception) {
                                 synchronized(errs) { errs.add("${e.name}: ${t.message}") }
                                 synchronized(rep) { rep.add(e.name + ": error " + (t.message ?: "")); report = rep.joinToString("\n") }
                             }

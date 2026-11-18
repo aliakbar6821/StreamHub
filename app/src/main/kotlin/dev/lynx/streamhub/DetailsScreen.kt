@@ -254,7 +254,7 @@ fun DetailsScreen(
     var range by remember { mutableStateOf(0) }
     var rangeOpen by remember { mutableStateOf(false) }
     var confirmAll by remember { mutableStateOf(false) }
-    val ext = Session.owner[media.id] ?: Store.ownerOf(media.id)
+    val ext = Session.owner[media.id]?.takeIf { ExtensionLoader.isEnabled(it) } ?: Store.ownerOf(media.id)
     val last = Store.historyFor(media.id)
 
     LaunchedEffect(media.id) {

@@ -33,7 +33,7 @@ import dev.lynx.streamhub.api.MediaType
 import kotlinx.coroutines.delay
 
 @Composable
-fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
+fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit, onExtensions: () -> Unit = {}) {
     val context = LocalContext.current
     var filter by remember { mutableStateOf("All") }
 
@@ -106,9 +106,12 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
         } else if (Session.loaded && Session.extensions.isEmpty()) {
             item {
                 Text(
-                    "No sources available. Open You > Sources & extensions to check default setup.",
+                    "All extensions are off. Enable MovieBox, Anilight or another installed extension to begin.",
                     modifier = Modifier.padding(16.dp),
                 )
+                OutlinedButton(onClick = onExtensions, modifier = Modifier.padding(horizontal = 16.dp)) {
+                    Text("Open Extensions")
+                }
             }
         }
 

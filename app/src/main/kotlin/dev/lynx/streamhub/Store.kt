@@ -254,7 +254,9 @@ object Store {
             ?: history.firstOrNull { it.item.id == itemId }?.extId?.takeIf { it.isNotEmpty() }
 
     fun ownerOf(itemId: String): Extension? {
-        val id = extIdFor(itemId) ?: return Session.extensions.singleOrNull()
-        return Session.extensions.firstOrNull { it.id == id }
+        val id = extIdFor(itemId) ?: itemId.takeIf { it.startsWith("cs3|") }
+            ?.split("|", limit = 3)?.getOrNull(1)?.let { "cs3:$it" }
+        val active = Session.extensions.filter { ExtensionLoader.isEnabled(it) }
+        return if (id != null) active.firstOrNull { it.id == id } else active.singleOrNull()
     }
 }

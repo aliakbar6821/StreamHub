@@ -29,7 +29,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,7 +50,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -122,7 +120,6 @@ import java.io.File
 import java.util.Locale
 
 private val Accent = Color(0xFFB388FF)
-private val PanelBg = Color(0xFF211F1D)
 
 private fun Context.findActivity(): Activity? {
     var c: Context? = this
@@ -206,11 +203,6 @@ private fun PauseIcon() {
         Spacer(Modifier.width(7.dp))
         Box(Modifier.size(7.dp, 26.dp).background(Color.White))
     }
-}
-
-@Composable
-private fun ChipBtn(label: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick) { Text(label, color = Color.White, fontSize = 13.sp, maxLines = 1) }
 }
 
 @Composable
@@ -356,6 +348,11 @@ fun PlayerScreen(
     var discovering by remember { mutableStateOf(false) }
     var failedSourceUrls by remember(ep.id, reloadKey) { mutableStateOf<Set<String>>(emptySet()) }
 
+    val lifecycle = (activity as? androidx.lifecycle.LifecycleOwner)?.lifecycle
+    val playbackIntent = remember(activity) {
+        PlaybackIntent(lifecycle?.currentState?.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) == true)
+    }
+
     val http = remember {
         DefaultHttpDataSource.Factory()
             .setUserAgent(Downloader.UA)
@@ -371,6 +368,9 @@ fun PlayerScreen(
                 .setLoadErrorHandlingPolicy(androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(3)))
             .build()
             .also { p ->
+                p.setAudioAttributes(androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
+                p.setHandleAudioBecomingNoisy(true)
                 var tp = p.trackSelectionParameters.buildUpon()
                 val audio = AppPrefs.audio(req.item.id)
                 if (audio.isNotEmpty()) tp = tp.setPreferredAudioLanguage(audio)
@@ -386,6 +386,15 @@ fun PlayerScreen(
     }
     val audioMgr = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val volAcc = remember { floatArrayOf(-1f) }
+
+    fun syncPlayback() {
+        playbackIntent.pictureInPicture = PlayerWindowState.inPip
+        exo.playWhenReady = playbackIntent.shouldPlay
+    }
+    fun requestPlayback(wantsPlay: Boolean) {
+        playbackIntent.wantsPlay = wantsPlay
+        syncPlayback()
+    }
 
     // ---------- helpers ----------
     fun showHud(t: String) {
@@ -614,15 +623,42 @@ fun PlayerScreen(
                     listOf(sub)).distinctBy { it.uri.toString() }
             ).build(), pos)
             exo.prepare()
-            exo.playWhenReady = true
+            syncPlayback()
             showHud("Subtitle loaded")
         }
     }
 
     // ---------- effects ----------
+    DisposableEffect(lifecycle, exo) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    playbackIntent.foreground = true; syncPlayback()
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE,
+                androidx.lifecycle.Lifecycle.Event.ON_STOP,
+                androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> {
+                    playbackIntent.foreground = false; syncPlayback(); saveProgress()
+                }
+                else -> Unit
+            }
+        }
+        lifecycle?.addObserver(observer)
+        syncPlayback()
+        onDispose { lifecycle?.removeObserver(observer) }
+    }
+    LaunchedEffect(PlayerWindowState.inPip) { syncPlayback() }
+
     DisposableEffect(exo) {
         val l = object : Player.Listener {
             override fun onIsPlayingChanged(isPlayingNow: Boolean) { isPlaying = isPlayingNow }
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (!playWhenReady && (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS ||
+                        reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY)) {
+                    playbackIntent.wantsPlay = false
+                }
+                if (playWhenReady && !playbackIntent.shouldPlay) exo.pause()
+            }
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == Player.STATE_BUFFERING
                 ended = state == Player.STATE_ENDED
@@ -696,9 +732,8 @@ fun PlayerScreen(
                     titleGenres = details.item.genres
                     details.episodes
                 }
-            } catch (t: Throwable) {
-                emptyList()
-            }
+            } catch (cancel: CancellationException) { throw cancel
+            } catch (_: Exception) { emptyList() }
         } else {
             Store.downloads
                 .filter { it.item.id == req.item.id }
@@ -734,7 +769,7 @@ fun PlayerScreen(
         if (req.localPath != null) return@LaunchedEffect
         val e = req.ext
         if (e == null) {
-            error = "Extension not found. Go back and reload."
+            error = "Enable this title’s extension in You > Sources & extensions."
             return@LaunchedEffect
         }
         val t0 = System.currentTimeMillis()
@@ -820,14 +855,13 @@ fun PlayerScreen(
                     .distinctBy { it.uri.toString() }
                 if (merged != existing) {
                     val position = exo.currentPosition.coerceAtLeast(0L)
-                    val playing = exo.playWhenReady
                     exo.setMediaItem(
                         current.buildUpon()
                             .setSubtitleConfigurations(merged).build(),
                         position,
                     )
                     exo.prepare()
-                    exo.playWhenReady = playing
+                    syncPlayback()
                 }
             }
         }
@@ -867,7 +901,7 @@ fun PlayerScreen(
             if (pendingStart > 0L) exo.seekTo(pendingStart)
             pendingStart = 0L
             exo.prepare()
-            exo.playWhenReady = true
+            syncPlayback()
             if (lp == null) {
                 delay(30000)
                 if (exo.playbackState != Player.STATE_READY && tryCompatibleVariant()) {
@@ -1172,7 +1206,7 @@ fun PlayerScreen(
                         }
                         RoundBtn(68.dp, {
                             if (ended) exo.seekTo(0L)
-                            if (exo.isPlaying) exo.pause() else exo.play()
+                            requestPlayback(!exo.isPlaying)
                             poke++
                         }) {
                             Icon(if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,

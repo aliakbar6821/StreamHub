@@ -8,7 +8,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Favorite
@@ -73,6 +72,7 @@ fun App() {
         NavTab("You", Icons.Filled.Person),
     )
     var selected by remember { mutableIntStateOf(0) }
+    var manageExtensions by remember { mutableStateOf(false) }
     var openItem by remember { mutableStateOf<MediaItem?>(null) }
     var playing by remember { mutableStateOf<PlayRequest?>(null) }
     var showSearch by remember { mutableStateOf(false) }
@@ -115,7 +115,7 @@ fun App() {
                     tabs.forEachIndexed { i, tab ->
                         NavigationBarItem(
                             selected = selected == i,
-                            onClick = { selected = i },
+                            onClick = { selected = i; manageExtensions = false },
                             icon = { Icon(tab.icon, contentDescription = tab.label) },
                             label = {
                                 Text(tab.label, fontSize = 11.sp, maxLines = 1, softWrap = false)
@@ -135,11 +135,12 @@ fun App() {
                     0 -> HomeScreen(
                         onOpen = { openItem = it },
                         onSearch = { showSearch = true },
+                        onExtensions = { manageExtensions = true; selected = 4 },
                     )
                      1 -> ScheduleScreen()
                      2 -> MyListScreen(onOpen = { openItem = it })
                     3 -> DownloadsScreen(onPlay = { playing = it })
-                    4 -> YouScreen()
+                    4 -> YouScreen(startAtExtensions = manageExtensions)
                     else -> Placeholder(tabs[selected].label)
                 }
             }
