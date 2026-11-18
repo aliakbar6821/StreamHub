@@ -56,11 +56,12 @@ private data class DlState(val pct: Int = 0, val done: Boolean = false, val fail
 
 private fun stateOf(c: Context, d: DownloadEntry): DlState {
     val st = Downloader.status(c, d.downloadId)
-    val f = File(d.path)
-    val done = st.first == 8 || (st.first == -1 && f.exists() && f.length() > 0)
-    val total = if (done) f.length() else if (d.downloadId >= 1_000_000_000_000L) Downloader.total(c, d.downloadId) else -1L
-    return DlState(if (done) 100 else st.second, done, st.first == 16,
-        if (done) f.length() else DlInfo.bytes(c, d.downloadId), total, st.first == 4, st.first == 1)
+    val size = DownloadFiles.size(c, d.path)
+    val done = (st.first == 8 || st.first == -1) && size > 0L
+    val missing = st.first == 8 && size < 0L
+    val total = if (done) size else if (d.downloadId >= 1_000_000_000_000L) Downloader.total(c, d.downloadId) else -1L
+    return DlState(if (done) 100 else st.second, done, st.first == 16 || missing,
+        if (done) size else DlInfo.bytes(c, d.downloadId), total, st.first == 4, st.first == 1)
 }
 
 private fun mb(b: Long): String = when {
@@ -104,6 +105,8 @@ private fun DlRow(d: DownloadEntry, s: DlState, label: String, onPlay: () -> Uni
             .getString(d.downloadId.toString(), null) ?: "Source not recorded"
     }
     val resumable = remember(d.downloadId) { Downloader.canResume(context, d.downloadId) }
+    val filename = remember(d.downloadId) { context.getSharedPreferences("dl_names", Context.MODE_PRIVATE)
+        .getString("${d.downloadId}.name", null) ?: if (!d.path.startsWith("content://")) File(d.path).name else "Saved video" }
     val status = when {
         s.done -> "Downloaded"
         s.failed -> "Failed"
@@ -131,6 +134,8 @@ private fun DlRow(d: DownloadEntry, s: DlState, label: String, onPlay: () -> Uni
         Spacer(Modifier.height(10.dp))
         Text("Source: $source", fontSize = 12.sp, color = colors.onSurfaceVariant)
         Text(label.ifBlank { "Audio / quality not recorded" }, fontSize = 12.sp, color = colors.onSurfaceVariant)
+        Text(filename, fontSize = 12.sp, color = colors.onSurfaceVariant,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -169,6 +174,7 @@ fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
     var edit by remember { mutableStateOf(false) }
     var newest by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
+    var removeFile by remember { mutableStateOf<DownloadEntry?>(null) }
     LaunchedEffect(entries) {
         while (true) {
             states = withContext(Dispatchers.IO) { entries.associateWith { stateOf(context, it) } }
@@ -258,9 +264,9 @@ fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
                 DlRow(
                     d, s, DlInfo.label(context, d.downloadId),
                     onPlay = { onPlay(PlayRequest(null, d.item, Episode(d.episodeId, d.episodeNumber, d.episodeTitle), 0L, d.path)) },
-                    onRemove = { Downloader.remove(context, d) },
+                    onRemove = { if (s.done) removeFile = d else Downloader.remove(context, d) },
                     onPause = { Downloader.pause(context, d.downloadId) },
-                    onResume = { Downloader.resume(context, d) },
+                    onResume = { DownloadAccess.request(context) { Downloader.resume(context, d) } },
                 )
             }
         }
@@ -268,10 +274,17 @@ fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
             AlertDialog(
                 onDismissRequest = { confirm = false },
                 title = { Text("Delete downloads") },
-                text = { Text("Remove all downloads for ${item.title}?") },
+                text = { Text("Delete all downloaded files for ${item.title}, including copies in phone Downloads?") },
                 confirmButton = { TextButton(onClick = { confirm = false; cur.forEach { Downloader.remove(context, it) } }) { Text("Delete") } },
                 dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } },
             )
         }
     }
+    removeFile?.let { download ->
+        AlertDialog(onDismissRequest = { removeFile = null }, title = { Text("Delete downloaded file?") },
+            text = { Text("This deletes the saved video, including its copy in phone Downloads.") },
+            confirmButton = { TextButton(onClick = { removeFile = null; Downloader.remove(context, download) }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { removeFile = null }) { Text("Cancel") } })
+    }
+
 }

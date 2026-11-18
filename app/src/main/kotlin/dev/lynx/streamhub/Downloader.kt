@@ -39,24 +39,28 @@ object Downloader {
     private class Prog(@Volatile var st: Int = 2, @Volatile var pct: Int = 0,
         @Volatile var bytes: Long = 0L, @Volatile var total: Long = -1L,
         @Volatile var paused: Boolean = false, var validator: String = "",
-        var segments: Int = 0, var fingerprint: String = "")
+        var segments: Int = 0, var fingerprint: String = "", var readyToPublish: Boolean = false)
     private class PauseSignal : IOException()
     private class HttpFailure(val code: Int) : IOException("Server said HTTP $code")
     private val slots = Semaphore(2)
     private val requests = ConcurrentHashMap<Long, Stream>()
+    private val cancelled = ConcurrentHashMap.newKeySet<Long>()
     private fun checkpoint(p: Prog) { if (p.paused) throw PauseSignal() }
     private fun save(c: Context, id: Long, p: Prog) {
+        if (id in cancelled) return
         c.getSharedPreferences("dl_progress", Context.MODE_PRIVATE).edit()
             .putLong("$id.bytes", p.bytes).putLong("$id.total", p.total)
             .putInt("$id.pct", p.pct).putString("$id.validator", p.validator)
-            .putInt("$id.segments", p.segments).putString("$id.fingerprint", p.fingerprint).apply()
+            .putInt("$id.segments", p.segments).putString("$id.fingerprint", p.fingerprint)
+            .putInt("$id.ready", if (p.readyToPublish) 1 else 0).apply()
     }
     private fun restored(c: Context, id: Long): Prog {
         val pref = c.getSharedPreferences("dl_progress", Context.MODE_PRIVATE)
         return Prog(st = 4, pct = pref.getInt("$id.pct", 0), bytes = pref.getLong("$id.bytes", 0L),
             total = pref.getLong("$id.total", -1L), paused = true,
             validator = pref.getString("$id.validator", "").orEmpty(),
-            segments = pref.getInt("$id.segments", 0), fingerprint = pref.getString("$id.fingerprint", "").orEmpty())
+            segments = pref.getInt("$id.segments", 0), fingerprint = pref.getString("$id.fingerprint", "").orEmpty(),
+            readyToPublish = pref.getInt("$id.ready", 0) == 1)
     }
     private fun request(c: Context, id: Long): Stream? = requests[id] ?: runCatching {
         val raw = c.getSharedPreferences("dl_requests", Context.MODE_PRIVATE).getString(id.toString(), null)
@@ -81,10 +85,30 @@ object Downloader {
                         slots.withPermit {
                             checkpoint(p)
                             p.st = 2
-                            if (isHls(stream)) hls(p, stream.url, stream.headers, file) { save(app, id, p) }
-                            else direct(p, stream.url, stream.headers, file) { save(app, id, p) }
+                            if (!p.readyToPublish || !file.exists() || file.length() != p.bytes) {
+                                if (isHls(stream)) hls(p, stream.url, stream.headers, file) { save(app, id, p) }
+                                else direct(p, stream.url, stream.headers, file) { save(app, id, p) }
+                                p.readyToPublish = true; p.bytes = file.length(); p.total = p.bytes
+                                save(app, id, p)
+                            }
+                            p.pct = 99
+                            val names = app.getSharedPreferences("dl_names", Context.MODE_PRIVATE)
+                            val folder = names.getString("$id.folder", null) ?: safeDownloadName(d.item.title, spaces = true)
+                            val name = names.getString("$id.name", null) ?: readableDownloadName(d.item,
+                                Episode(d.episodeId, d.episodeNumber, d.episodeTitle), stream)
+                            val published = DownloadFiles.publish(app, id, file, folder, name) { checkpoint(p) }
+                            currentCoroutineContext().ensureActive()
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                                if (id in cancelled) throw CancellationException("Download removed")
+                                Store.publishDownloadPath(id, published)
+                                if (id in cancelled) throw CancellationException("Download removed")
+                                DownloadFiles.committed(app, id)
+                                file.delete()
+                                p.pct = 100; p.st = 8; p.total = p.bytes
+                                save(app, id, p); setState(app, id, 8)
+                            }
                         }
-                        p.pct = 100; p.st = 8; p.total = file.length(); p.bytes = file.length()
+                        p.pct = 100; p.st = 8; p.total = p.bytes
                         save(app, id, p); setState(app, id, 8)
                         break
                     } catch (pause: PauseSignal) {
@@ -114,7 +138,9 @@ object Downloader {
         if (p.st == 8 || p.st == 16) return
         p.paused = true; p.st = 4; save(c, id, p); setState(c, id, 4)
     }
-    fun resume(c: Context, d: DownloadEntry): Boolean {
+    fun resume(c: Context, d: DownloadEntry, serviceAlreadyStarted: Boolean = false): Boolean {
+        if (status(c, d.downloadId).first == 8 || !DownloadAccess.canSavePublic(c)) return false
+        if (!serviceAlreadyStarted && !DownloadService.ensureRunning(c, d.downloadId)) return false
         val stream = request(c, d.downloadId) ?: return false
         val p = progs.getOrPut(d.downloadId) { restored(c, d.downloadId) }
         p.paused = false; p.st = 1; setState(c, d.downloadId, 1)
@@ -142,22 +168,24 @@ object Downloader {
     }
 
     private fun setState(c: Context, id: Long, st: Int) {
+        if (id in cancelled) return
         c.getSharedPreferences("dl_state", Context.MODE_PRIVATE).edit().putInt(id.toString(), st).apply()
     }
 
     /** Returns false if this episode was already downloaded. */
-    fun enqueue(context: Context, item: MediaItem, ep: Episode, s: Stream, label: String = "", sd: Boolean = false, sourceName: String? = null): Boolean {
+    fun enqueue(context: Context, item: MediaItem, ep: Episode, s: Stream, label: String = "", sourceName: String? = null): Boolean {
         if (Store.hasDownload(ep.id)) return false
         val app = context.applicationContext
-        val hls = isHls(s)
-        val ext = if (hls) "ts" else s.url.substringBefore('?').substringAfterLast('.', "mp4").lowercase()
-            .let { if (it.length in 2..4 && it.all { ch -> ch.isLetterOrDigit() }) it else "mp4" }
+        if (!DownloadAccess.canSavePublic(app)) return false
         val id = newId()
-        val name = "${item.id.hashCode()}_${ep.id.hashCode()}_$id.$ext".replace(Regex("[^A-Za-z0-9._-]"), "_")
-        val dirs = app.getExternalFilesDirs("downloads")
-        val dir = (if (sd) dirs.getOrNull(1) else null) ?: app.getExternalFilesDir("downloads") ?: File(app.filesDir, "downloads")
-        dir.mkdirs()
+        val name = readableDownloadName(item, ep, s)
+        val folder = safeDownloadName(item.title, spaces = true)
+        val root = app.getExternalFilesDir("downloads") ?: File(app.filesDir, "downloads")
+        val dir = File(root, ".partial/$id")
+        check(dir.isDirectory || dir.mkdirs()) { "Cannot create staging folder" }
         val file = File(dir, name)
+        app.getSharedPreferences("dl_names", Context.MODE_PRIVATE).edit()
+            .putString("$id.name", name).putString("$id.folder", folder).apply()
         app.getSharedPreferences("dl_meta", Context.MODE_PRIVATE).edit().putString(id.toString(), label).apply()
         setState(app, id, 2)
         Store.addDownload(DownloadEntry(item, ep.id, ep.number, ep.title ?: "", file.absolutePath, id))
@@ -171,8 +199,9 @@ object Downloader {
         val provider = Session.owner[item.id] ?: Store.ownerOf(item.id)
         app.getSharedPreferences("dl_source", Context.MODE_PRIVATE).edit()
             .putString(id.toString(), providerDisplayName(sourceName ?: provider?.name)).apply()
-        start(app, Store.downloads.first { it.downloadId == id }, s, p)
-
+        val entry = Store.downloads.first { it.downloadId == id }
+        if (!DownloadService.ensureRunning(app, id)) { remove(app, entry); return false }
+        start(app, entry, s, p)
         return true
     }
 
@@ -384,6 +413,12 @@ object Downloader {
         if (id >= OWN) {
             val p = progs[id]
             if (p != null) return p.st to p.pct
+            val recorded = Store.downloads.firstOrNull { it.downloadId == id }?.path
+            if (recorded != null && (recorded.startsWith("content://") ||
+                    (recorded.startsWith("/") && recorded.contains("/Download/streamHub/")))) {
+                DownloadFiles.committed(context, id)
+                return 8 to 100
+            }
             val st = context.getSharedPreferences("dl_state", Context.MODE_PRIVATE).getInt(id.toString(), -1)
             val pct = context.getSharedPreferences("dl_progress", Context.MODE_PRIVATE).getInt("$id.pct", 0)
             return when {
@@ -406,20 +441,36 @@ object Downloader {
 
     fun bytes(id: Long): Long = progs[id]?.bytes ?: 0L
 
+    fun hasActiveWork(): Boolean = progs.values.any { it.st == 1 || it.st == 2 }
+    fun pauseAll(context: Context) { progs.keys.toList().forEach { pause(context, it) } }
+
     fun remove(context: Context, d: DownloadEntry) {
+        val current = Store.downloads.firstOrNull { it.downloadId == d.downloadId } ?: d
+        cancelled.add(d.downloadId)
         val job = jobs.remove(d.downloadId)
         job?.cancel()
         requests.remove(d.downloadId)
-        // Join before deleting so a cancelled writer cannot recreate or append to this path.
-        scope.launch { job?.cancelAndJoin(); progs.remove(d.downloadId); File(d.path).delete() }
+        DownloadNotifications.cancel(context, d.downloadId)
+        scope.launch {
+            job?.cancelAndJoin()
+            DownloadFiles.abortPending(context, d.downloadId)
+            runCatching { DownloadFiles.delete(context, current.path) }
+            File(current.path).parentFile?.takeIf { it.name == d.downloadId.toString() }?.delete()
+            progs.remove(d.downloadId)
+            val progress = context.getSharedPreferences("dl_progress", Context.MODE_PRIVATE).edit()
+            listOf("bytes", "total", "pct", "validator", "segments", "fingerprint", "ready").forEach { progress.remove("${d.downloadId}.$it") }
+            progress.apply()
+            cancelled.remove(d.downloadId)
+        }
         if (d.downloadId < OWN) {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             runCatching { dm.remove(d.downloadId) }
         }
-        context.getSharedPreferences("dl_state", Context.MODE_PRIVATE).edit().remove(d.downloadId.toString()).apply()
-        context.getSharedPreferences("dl_requests", Context.MODE_PRIVATE).edit().remove(d.downloadId.toString()).apply()
-        context.getSharedPreferences("dl_source", Context.MODE_PRIVATE).edit().remove(d.downloadId.toString()).apply()
-        context.getSharedPreferences("dl_meta", Context.MODE_PRIVATE).edit().remove(d.downloadId.toString()).apply()
-        Store.removeDownload(d)
+        listOf("dl_state", "dl_requests", "dl_source", "dl_meta", "dl_errors").forEach { name ->
+            context.getSharedPreferences(name, Context.MODE_PRIVATE).edit().remove(d.downloadId.toString()).apply()
+        }
+        context.getSharedPreferences("dl_names", Context.MODE_PRIVATE).edit()
+            .remove("${d.downloadId}.name").remove("${d.downloadId}.folder").apply()
+        Store.removeDownload(current)
     }
 }

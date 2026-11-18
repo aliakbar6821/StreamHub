@@ -51,8 +51,6 @@ fun DownloadSheet(
     var initialized by remember(ep.id) { mutableStateOf(false) }
     var qualityChosen by remember(ep.id) { mutableStateOf(false) }
     var availableHeights by remember(ep.id) { mutableStateOf<List<Int?>>(emptyList()) }
-    var sd by remember { mutableStateOf(false) }
-    val hasSd = remember { context.getExternalFilesDirs("downloads").let { it.size > 1 && it[1] != null } }
     val busy = searching || preparing > 0
 
     LaunchedEffect(ep.id, ext?.id, refresh) {
@@ -204,23 +202,20 @@ fun DownloadSheet(
                 Text(warning, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
             }
-            if (hasSd) {
-                Text("Storage", style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PillChip("Internal", !sd) { sd = false }
-                    PillChip("SD card", sd) { sd = true }
-                }
-            }
+            Text("Save to Downloads/streamHub/${safeDownloadName(media.title, spaces = true)}",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 16.dp))
             Row(Modifier.padding(top = 22.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f).height(50.dp)) { Text("Cancel") }
                 Button(enabled = picked != null, modifier = Modifier.weight(1f).height(50.dp), onClick = {
                     picked?.let { stream ->
                         val choice = streamChoice(stream)
                         val label = listOfNotNull(choice.audioLabel, choice.height?.let { "${it}p" }).joinToString(" · ")
-                        val ok = Downloader.enqueue(context, media, ep, stream, label, sd, ext?.name)
-                        Toast.makeText(context, if (ok) "Download started" else "Already downloaded", Toast.LENGTH_SHORT).show()
-                        onDismiss()
+                        DownloadAccess.request(context) {
+                            val ok = Downloader.enqueue(context, media, ep, stream, label, sourceName = ext?.name)
+                            Toast.makeText(context, if (ok) "Download started" else "Not started. Already queued or permission unavailable.", Toast.LENGTH_SHORT).show()
+                            if (ok) onDismiss()
+                        }
                     }
                 }) { Text("Download") }
             }

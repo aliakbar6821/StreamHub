@@ -227,8 +227,19 @@ object Store {
         saveDownloads()
     }
 
+    suspend fun publishDownloadPath(id: Long, path: String) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+        updateDownloadPath(id, path)
+    }
+
+    private fun updateDownloadPath(id: Long, path: String) {
+        val index = downloads.indexOfFirst { it.downloadId == id }
+        check(index >= 0) { "Download was cancelled" }
+        downloads[index] = downloads[index].copy(path = path)
+        saveDownloads()
+    }
+
     fun removeDownload(d: DownloadEntry) {
-        downloads.remove(d)
+        downloads.removeAll { it.downloadId == d.downloadId }
         saveDownloads()
     }
 

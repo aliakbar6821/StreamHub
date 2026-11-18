@@ -458,6 +458,7 @@ fun DetailsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     confirmAll = false
+                    DownloadAccess.request(context) {
                     scope.launch {
                         val targets = eps.filter { !Store.hasDownload(it.id) }.take(10)
                         var ok = 0
@@ -465,11 +466,12 @@ fun DetailsScreen(
                         for (e in targets) {
                             try {
                                 val s = withContext(Dispatchers.IO) { ext?.getStreams(e.id)?.let { l -> l.firstOrNull { !isHls(it) } ?: l.firstOrNull() } }
-                                if (s != null && Downloader.enqueue(context, media, e, s, s.quality ?: "")) ok++
-                            } catch (_: Throwable) {
-                            }
+                                if (s != null && Downloader.enqueue(context, media, e, s, s.quality ?: "", sourceName = ext?.name)) ok++
+                            } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel
+                            } catch (_: Exception) { }
                         }
                         Toast.makeText(context, "Queued $ok of ${targets.size}", Toast.LENGTH_LONG).show()
+                    }
                     }
                 }) { Text("Start") }
             },

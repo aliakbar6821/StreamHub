@@ -877,7 +877,7 @@ fun PlayerScreen(
             val lp = req.localPath
             if (lp != null) {
                 val path = Store.downloads.firstOrNull { it.episodeId == ep.id }?.path ?: lp
-                exo.setMediaItem(M3Item.fromUri(Uri.fromFile(File(path))))
+                exo.setMediaItem(M3Item.fromUri(DownloadFiles.uri(path)))
             } else {
                 if (streamsFor != ep.id || streams.isEmpty()) return@LaunchedEffect
                 val s = streams.getOrNull(sourceIdx) ?: throw IllegalStateException("No streams found")

@@ -36,7 +36,47 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.sp
 import dev.lynx.streamhub.api.MediaItem
 
+object DownloadNavigation {
+    var request by mutableIntStateOf(0)
+}
+
 class MainActivity : ComponentActivity() {
+    private var afterDownloadPermission: (() -> Unit)? = null
+    private val downloadPermissions = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) {
+        val ready = afterDownloadPermission
+        afterDownloadPermission = null
+        if (DownloadAccess.canSavePublic(this)) {
+            if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(
+                    this, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                android.widget.Toast.makeText(this, "Notifications are off. Downloads still appear inside the app.", android.widget.Toast.LENGTH_LONG).show()
+            }
+            ready?.invoke()
+        } else android.widget.Toast.makeText(this, "Storage permission is required to save to Downloads.", android.widget.Toast.LENGTH_LONG).show()
+    }
+    fun requestDownloadAccess(ready: () -> Unit) {
+        if (afterDownloadPermission != null) return
+        val missing = mutableListOf<String>()
+        if (!DownloadAccess.canSavePublic(this)) missing.add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        val prefs = getSharedPreferences("download_access", MODE_PRIVATE)
+        if (android.os.Build.VERSION.SDK_INT >= 33 && !prefs.getBoolean("notifications_asked", false) &&
+            androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            missing.add(android.Manifest.permission.POST_NOTIFICATIONS)
+            prefs.edit().putBoolean("notifications_asked", true).apply()
+        }
+        if (missing.isEmpty()) ready()
+        else { afterDownloadPermission = ready; downloadPermissions.launch(missing.toTypedArray()) }
+    }
+    private fun handleDownloadIntent(intent: android.content.Intent?) {
+        if (intent?.getBooleanExtra("open_downloads", false) == true) {
+            intent.removeExtra("open_downloads"); DownloadNavigation.request++
+        }
+    }
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent); setIntent(intent); handleDownloadIntent(intent)
+    }
+    override fun onDestroy() { afterDownloadPermission = null; super.onDestroy() }
+
     override fun onPictureInPictureModeChanged(
         isInPictureInPictureMode: Boolean,
         newConfig: android.content.res.Configuration,
@@ -52,6 +92,7 @@ class MainActivity : ComponentActivity() {
         Store.init(this)
         PlayerPrefs.init(this)
         UiScale.value = PlayerPrefs.uiScale
+        handleDownloadIntent(intent)
         setContent {
             StreamHubTheme {
                 App()
@@ -76,6 +117,13 @@ fun App() {
     var openItem by remember { mutableStateOf<MediaItem?>(null) }
     var playing by remember { mutableStateOf<PlayRequest?>(null) }
     var showSearch by remember { mutableStateOf(false) }
+
+    androidx.compose.runtime.LaunchedEffect(DownloadNavigation.request) {
+        if (DownloadNavigation.request > 0) {
+            selected = 3; playing = null; openItem = null; showSearch = false
+            DownloadNavigation.request = 0
+        }
+    }
 
     val p = playing
     val item = openItem
