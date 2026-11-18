@@ -73,7 +73,7 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    "StreamHub",
+                    "streamHub",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.primary,

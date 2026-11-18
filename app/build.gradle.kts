@@ -13,7 +13,7 @@ android {
         targetSdk = 35
         versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1) + 100
         versionName = "0.2.0"
-        manifestPlaceholders["appLabel"] = "StreamHub"
+        manifestPlaceholders["appLabel"] = "streamHub"
     }
     signingConfigs {
         create("privateRelease") {
@@ -27,7 +27,7 @@ android {
     buildTypes {
         release {
             applicationIdSuffix = ".stable"
-            manifestPlaceholders["appLabel"] = "StreamHub Stable"
+            manifestPlaceholders["appLabel"] = "streamHub"
             isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true

@@ -183,7 +183,7 @@ fun DownloadsScreen(onPlay: (PlayRequest) -> Unit) {
     if (cur == null) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("StreamHub", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold)
+                Text("streamHub", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold)
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = { edit = !edit }) { Icon(Icons.Filled.Edit, contentDescription = "Edit") }
             }

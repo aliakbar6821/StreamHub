@@ -411,12 +411,13 @@ fun PlayerScreen(
         posMs = 0L
     }
 
-    val dubOf = { s: Stream -> s.quality?.contains("dub", true) == true }
-    val mixedAudio = streams.any { dubOf(it) } && streams.any { !dubOf(it) }
+    val dubOf = { s: Stream -> sourceAudioVersion(s) }
+    val mixedAudio = streams.any { dubOf(it) == true } && streams.any { dubOf(it) == false }
     val hasDubChoice = dubList.isNotEmpty() || mixedAudio
 
     fun setDub(want: Boolean) {
-        if (want == dubOn) {
+        if (want == dubOn && (dubList.isNotEmpty() ||
+                streams.getOrNull(sourceIdx)?.let { dubOf(it) == want } == true)) {
             page = ""
             return
         }
@@ -851,8 +852,9 @@ fun PlayerScreen(
                 val b = M3Item.Builder().setUri(s.url)
                     .setSubtitleConfigurations(remoteSubtitleConfigs())
                 if (hlsIdx == sourceIdx || s.url.contains("m3u8", true)) b.setMimeType(MimeTypes.APPLICATION_M3U8)
-                srcInfo = "Source ${sourceIdx + 1} of ${streams.size}" +
-                    (s.quality?.takeIf { it.isNotBlank() }?.let { " - $it" } ?: "")
+                val provider = providerDisplayName((req.ext ?: Store.ownerOf(req.item.id))?.name)
+                srcInfo = "$provider · Video ${sourceIdx + 1} of ${streams.size}" +
+                    (streamChoice(s).height?.let { " · ${it}p" } ?: "")
                 tracks = Tracks.EMPTY
                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                     .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
@@ -997,16 +999,25 @@ fun PlayerScreen(
     val videoOpts = trackOpts(activeTracks, C.TRACK_TYPE_VIDEO)
     val currentChoice = streams.getOrNull(sourceIdx)?.let { streamChoice(it) }
     val providerName = if (req.localPath != null) "Downloaded file"
-        else providerDisplayName(req.ext?.name)
+        else providerDisplayName((req.ext ?: Store.ownerOf(req.item.id))?.name)
     val externalAudio = streams.map { streamChoice(it) }.filter { it.language != null }
         .distinctBy { it.audioKey }
     val embeddedCodes = audioOpts.mapNotNull { audioLanguageCode(it.lang) }.toSet()
     val externalRows = externalAudio.filter {
         it.audioKey !in embeddedCodes && !(it.audioKey == currentChoice?.audioKey && audioOpts.size == 1)
     }
-    val currentAudioLabel = audioOpts.firstOrNull { it.selected }?.let {
-        audioLanguageName(it.lang) ?: currentChoice?.takeIf { c -> c.language != null }?.audioLabel ?: it.label
-    } ?: currentChoice?.takeIf { it.language != null }?.audioLabel ?: "Not reported"
+    val selectedVersion = sourceAudioVersion(streams.getOrNull(sourceIdx))
+        ?: if (dubList.isNotEmpty()) dubOn else null
+    fun audioOptionLabel(option: TrackOpt): String {
+        audioLanguageName(option.lang)?.let { return it }
+        if (audioOpts.size == 1) currentChoice?.takeIf { it.language != null }?.let { return it.audioLabel }
+        if (option.label.startsWith("Audio ") && option.label.endsWith("language not provided")) {
+            return untaggedAudioLabel(selectedVersion, audioOpts.size, audioOpts.indexOf(option))
+        }
+        return option.label
+    }
+    val currentAudioLabel = audioOpts.firstOrNull { it.selected }?.let { audioOptionLabel(it) }
+        ?: currentChoice?.takeIf { it.language != null }?.audioLabel ?: "Audio · language unverified"
     val adaptiveHeights = videoOpts.map { it.height }.filter { it > 0 }.distinct()
     val externalHeights = streams.filter { streamChoice(it).audioKey == currentChoice?.audioKey.orEmpty() }
         .mapNotNull { streamChoice(it).height }
@@ -1462,6 +1473,10 @@ fun PlayerScreen(
                                 }
 
                                 "audio" -> {
+                                    item { Text("Language names come from file or provider metadata, not speech detection. " +
+                                        "Original/Dubbed describes the selected source version; unverified means its language tag is missing.",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(16.dp)) }
                                     items(externalRows, key = { "file:" + it.audioKey }) { choice ->
                                         OptionRow(choice.audioLabel,
                                             selected = choice.audioKey == currentChoice?.audioKey) {
@@ -1469,9 +1484,7 @@ fun PlayerScreen(
                                         }
                                     }
                                     items(audioOpts) { o ->
-                                        val label = audioLanguageName(o.lang)
-                                            ?: currentChoice?.takeIf { it.language != null && audioOpts.size == 1 }?.audioLabel
-                                            ?: o.label
+                                        val label = audioOptionLabel(o)
                                         OptionRow(label, selected = o.selected) { pickAudio(o); page = "" }
                                     }
                                     if (audioOpts.isEmpty() && externalRows.isEmpty()) {
@@ -1500,12 +1513,12 @@ fun PlayerScreen(
                                         )
                                     }
                                     item {
-                                        OptionRow("Subbed source", selected = !dubOn) {
+                                        OptionRow("Subbed source", selected = selectedVersion == false) {
                                             setDub(false)
                                         }
                                     }
                                     item {
-                                        OptionRow("Dubbed source", selected = dubOn) {
+                                        OptionRow("Dubbed source", selected = selectedVersion == true) {
                                             setDub(true)
                                         }
                                     }
@@ -1603,8 +1616,8 @@ fun PlayerScreen(
 
                                 "source" -> {
                                     item { OptionRow("Source", providerName, enabled = false) {} }
-                                    item { Text("This title stays with the source selected in Home or Search. " +
-                                        "Return there to open a title from another source.",
+                                    item { Text("The provider stays fixed to your Home/Search selection. " +
+                                        "MegaPlay/MegaDub are video hosts returned by that provider, not extra providers or audio languages.",
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(20.dp)) }
                                 }

@@ -129,3 +129,18 @@ suspend fun downloadVariants(stream: Stream): Pair<List<Stream>, String?> = with
         variants.distinctBy { it.url } to if (variants.isEmpty()) "No downloadable HLS variants reported." else null
     } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel } catch (t: Exception) { emptyList<Stream>() to "Could not inspect HLS download: ${t.message}" } finally { con.disconnect() }
 }
+
+/** Only explicit version markers; a host name such as MegaDub is NOT an audio tag. */
+fun sourceAudioVersion(stream: Stream?): Boolean? {
+    val label = stream?.quality.orEmpty()
+    val dubbed = Regex("(?i)\\b(dub|dubbed)\\b").containsMatchIn(label)
+    val subbed = Regex("(?i)\\b(sub|subbed)\\b").containsMatchIn(label)
+    return when { dubbed && !subbed -> true; subbed && !dubbed -> false; else -> null }
+}
+
+fun untaggedAudioLabel(version: Boolean?, count: Int, index: Int): String = when {
+    count > 1 -> "Audio track ${index + 1} · language unverified"
+    version == false -> "Original audio · language unverified"
+    version == true -> "Dubbed audio · language unverified"
+    else -> "Audio · language unverified"
+}
