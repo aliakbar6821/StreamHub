@@ -430,6 +430,7 @@ fun PlayerScreen(
         exo.playWhenReady = playbackIntent.shouldPlay && error == null
     }
     fun requestPlayback(wantsPlay: Boolean) {
+        Diagnostics.event("player.intent","play=$wantsPlay")
         playbackIntent.wantsPlay = wantsPlay
         syncPlayback()
     }
@@ -492,6 +493,7 @@ fun PlayerScreen(
             ?: choices.firstOrNull()?.language ?: "original"
     }
     fun changePlaybackSource(index: Int, language: String, height: Int) {
+        Diagnostics.event("player.source.change","index=$index language=$language height=$height locked=$lockQuality")
         pendingStart=exo.currentPosition.coerceAtLeast(0L)
         tracks=Tracks.EMPTY
         qualityH=height
@@ -502,6 +504,7 @@ fun PlayerScreen(
         error=null;sourceIdx=index;page=""
     }
     fun pickResolution(height: Int) {
+        Diagnostics.event("player.quality.request","height=$height locked=$lockQuality")
         val available = trackOpts(tracks, C.TRACK_TYPE_VIDEO).map { it.height }.filter { it > 0 }.distinct()
         if (height > 0 && height !in available) {
             val language=playingLanguage()
@@ -538,6 +541,7 @@ fun PlayerScreen(
     }
 
     fun pickAudio(o: TrackOpt) {
+        Diagnostics.event("player.audio.request","language=${audioLanguageCode(o.lang) ?: "original"}")
         tweak {
             var b = it.setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
                 .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
@@ -652,6 +656,7 @@ fun PlayerScreen(
         val l = object : Player.Listener {
             override fun onIsPlayingChanged(isPlayingNow: Boolean) { isPlaying = isPlayingNow }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                Diagnostics.event("player.playWhenReady","play=$playWhenReady reason=$reason")
                 if (!playWhenReady && (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS ||
                         reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY)) {
                     playbackIntent.wantsPlay = false
@@ -659,12 +664,17 @@ fun PlayerScreen(
                 if (playWhenReady && !playbackIntent.shouldPlay) exo.pause()
             }
             override fun onPlaybackStateChanged(state: Int) {
+                Diagnostics.event("player.state","state=$state")
                 buffering = state == Player.STATE_BUFFERING
                 ended = state == Player.STATE_ENDED
                 if (state == Player.STATE_READY && exo.duration > 0) durMs = exo.duration
             }
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo,newPosition: Player.PositionInfo,reason: Int) {
+                Diagnostics.event("player.position.change","fromMs=${oldPosition.positionMs} toMs=${newPosition.positionMs} reason=$reason")
+            }
             override fun onTracksChanged(t: Tracks) { tracks = t }
             override fun onPlayerError(e: PlaybackException) {
+                Diagnostics.failure("player.error",e)
                 val m = (e.errorCodeName + ": " + (e.message ?: "")).trim()
                 val u = streams.getOrNull(sourceIdx)?.url ?: ""
                 val parse = e.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
@@ -783,6 +793,7 @@ fun PlayerScreen(
                     val previous = verifiedSources[streams.getOrNull(sourceIdx)?.url]
                     // A labelled file may contain another language/resolution. Verify it too.
                     val result = VerifiedStreams.inspect(context, stream)
+                    Diagnostics.event("player.source.verified","complete=${result.complete} audio=${result.audio.size} heights=${result.heights}")
                     verifiedSources = verifiedSources + (stream.url to result)
                     val adaptiveUpgrade = previous?.complete == true && previous.heights.size <= 1 &&
                         result.heights.size > 1 && exo.currentPosition < 15_000L

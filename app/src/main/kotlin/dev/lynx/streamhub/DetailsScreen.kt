@@ -263,8 +263,12 @@ fun DetailsScreen(
             return@LaunchedEffect
         }
         try {
+            Diagnostics.event("details.load.start")
             details = withContext(Dispatchers.IO) { ext.getDetails(media.id) }
+            Diagnostics.event("details.load.finished")
         } catch (t: Throwable) {
+            if(t is kotlinx.coroutines.CancellationException)throw t
+            Diagnostics.failure("details.load.error",t)
             error = t.message ?: "Failed to load"
         }
     }

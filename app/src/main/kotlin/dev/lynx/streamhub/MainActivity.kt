@@ -67,6 +67,14 @@ class MainActivity : ComponentActivity() {
         if (missing.isEmpty()) ready()
         else { afterDownloadPermission = ready; downloadPermissions.launch(missing.toTypedArray()) }
     }
+    fun requestLogExportAccess(ready: () -> Unit) {
+        if(afterDownloadPermission!=null)return
+        if(DownloadAccess.canSavePublic(this))ready()
+        else {
+            afterDownloadPermission=ready
+            downloadPermissions.launch(arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE))
+        }
+    }
     private fun handleDownloadIntent(intent: android.content.Intent?) {
         if (intent?.getBooleanExtra("open_downloads", false) == true) {
             intent.removeExtra("open_downloads"); DownloadNavigation.request++
@@ -75,7 +83,10 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent); setIntent(intent); handleDownloadIntent(intent)
     }
-    override fun onDestroy() { afterDownloadPermission = null; super.onDestroy() }
+    override fun onResume() { super.onResume(); Diagnostics.event("activity.resume") }
+    override fun onPause() { Diagnostics.event("activity.pause"); super.onPause() }
+    override fun onStop() { Diagnostics.event("activity.stop"); super.onStop() }
+    override fun onDestroy() { Diagnostics.event("activity.destroy"); afterDownloadPermission = null; super.onDestroy() }
 
     override fun onPictureInPictureModeChanged(
         isInPictureInPictureMode: Boolean,
@@ -125,6 +136,15 @@ fun App() {
         }
     }
 
+    androidx.compose.runtime.LaunchedEffect(selected, playing, openItem, showSearch, manageExtensions) {
+        Diagnostics.event("navigation", when {
+            playing!=null -> "player"
+            openItem!=null -> "details"
+            showSearch -> "search"
+            manageExtensions -> "extensions"
+            else -> tabs[selected].label
+        })
+    }
     val p = playing
     val item = openItem
     if (p != null) {

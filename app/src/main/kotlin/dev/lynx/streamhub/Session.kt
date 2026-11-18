@@ -59,12 +59,12 @@ object Session {
         loading = true
         try {
             val app = context.applicationContext
-            val setupError = DefaultSources.ensure(app)
+            Diagnostics.event("extensions.load.start")
             val ownership = mutableMapOf<String, Extension>()
             val result = withContext(Dispatchers.IO) {
                 val exts = ExtensionLoader.loadAll(app)
                 val all = mutableListOf<HomeSection>()
-                var err: String? = setupError
+                var err: String? = null
                 val gate = Semaphore(3)
                 val feeds = coroutineScope {
                     exts.map { e -> async {
@@ -86,7 +86,7 @@ object Session {
                     feed.onSuccess { sections ->
                         sections.forEach { sec -> sec.items.forEach { ownership[it.id] = e } }
                         all.addAll(sections)
-                    }.onFailure { err = "${e.name}: ${it.message}" }
+                    }.onFailure { Diagnostics.failure("home.source.error",it);err = "${e.name}: ${it.message}" }
                 }
                 Triple(exts, all, err)
             }
@@ -96,6 +96,7 @@ object Session {
             sections = result.second
             error = result.third
             loaded = true
+            Diagnostics.event("extensions.load.finished","sources=${extensions.size} sections=${sections.size} errors=${error!=null}")
         } finally {
             loading = false
         }

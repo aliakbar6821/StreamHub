@@ -28,7 +28,7 @@ import kotlinx.coroutines.withContext
 
 @Composable
 private fun MenuRow(icon: ImageVector, label: String, value: String? = null, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 20.dp),
+    Row(Modifier.fillMaxWidth().clickable { Diagnostics.event("settings.action",label); onClick() }.padding(horizontal = 18.dp, vertical = 20.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, modifier = Modifier.size(25.dp))
         Spacer(Modifier.width(16.dp))
@@ -48,6 +48,7 @@ fun YouScreen(startAtExtensions: Boolean = false) {
     var edit by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
     var appearance by remember { mutableStateOf(false) }
+    var diagnostics by remember { mutableStateOf(false) }
     var filesMenu by remember { mutableStateOf(false) }
     var listOnly by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -127,6 +128,8 @@ fun YouScreen(startAtExtensions: Boolean = false) {
             HorizontalDivider(color = MaterialTheme.colorScheme.background, thickness = 2.dp)
             MenuRow(Icons.Filled.Palette, "Appearance", AppPrefs.appearance.replaceFirstChar { it.uppercase() }) { appearance = true }
             HorizontalDivider(color = MaterialTheme.colorScheme.background, thickness = 2.dp)
+            MenuRow(Icons.Filled.BugReport, "Diagnostics") { diagnostics = true }
+            HorizontalDivider(color = MaterialTheme.colorScheme.background, thickness = 2.dp)
             MenuRow(Icons.Filled.Info, "About") { about = true }
         }
         Text("Preferences", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(vertical = 18.dp))
@@ -142,6 +145,7 @@ fun YouScreen(startAtExtensions: Boolean = false) {
         }
         Spacer(Modifier.height(32.dp))
     }
+    if (diagnostics) DiagnosticsSettings { diagnostics = false }
     if (appearance) AlertDialog(onDismissRequest = { appearance = false },
         title = { Text("Appearance") }, text = {
             Column {

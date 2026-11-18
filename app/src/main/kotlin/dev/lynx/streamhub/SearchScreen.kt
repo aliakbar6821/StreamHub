@@ -130,6 +130,7 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
             error = null
             Session.results = emptyList()
             Session.searched = true
+            Diagnostics.event("search.submit")
             try {
                 if (Session.extensions.isEmpty()) Session.reload(context)
                 val requestGeneration = Session.generation
@@ -154,12 +155,14 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
                                 }
                             } catch (cancel: CancellationException) { throw cancel
                             } catch (t: Exception) {
+                                Diagnostics.failure("search.source.error",t)
                                 synchronized(errs) { errs.add("${e.name}: ${t.message}") }
                                 synchronized(rep) { rep.add(e.name + ": error " + (t.message ?: "")); report = rep.joinToString("\n") }
                             }
                         }
                     }.awaitAll()
                 }
+                Diagnostics.event("search.finished","results=${Session.results.size} errors=${errs.size}")
                 error = errs.firstOrNull()
             } finally {
                 loading = false

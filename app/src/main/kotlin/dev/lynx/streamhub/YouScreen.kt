@@ -53,14 +53,14 @@ fun ExtensionsScreen() {
     var available by remember { mutableStateOf<Map<String, List<RepoExt>>>(emptyMap()) }
     var errors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val repositories = Store.repos.toList()
-    val defaults = listOf(InstalledExtension("cs3:MovieBoxProvider", "MovieBox", 0),
-        InstalledExtension("cs3:Anilight", "Anilight", 0))
+
 
     suspend fun readInstalled() {
         installed = withContext(Dispatchers.IO) { ExtensionLoader.installed(context) }
     }
     fun toggle(key: String, enabled: Boolean) {
         if (busy != null) return
+        Diagnostics.event("extension.toggle","enabled=$enabled")
         AppPrefs.setExtensionEnabled(key, enabled)
         Session.invalidate()
         busy = key
@@ -81,7 +81,7 @@ fun ExtensionsScreen() {
                 }
                 refresh++
             } catch (cancel: CancellationException) { throw cancel
-            } catch (t: Exception) { status = t.message ?: "Could not update extensions"
+            } catch (t: Exception) { Diagnostics.failure("extensions.operation.error",t);status = t.message ?: "Could not update extensions"
             } finally { busy = null }
         }
     }
@@ -94,7 +94,7 @@ fun ExtensionsScreen() {
         for (repo in repositories) {
             try { ok[repo] = Repos.fetch(repo)
             } catch (cancel: CancellationException) { throw cancel
-            } catch (t: Exception) { bad[repo] = t.message ?: "Could not load repository" }
+            } catch (t: Exception) { Diagnostics.failure("extensions.repository.error",t);bad[repo] = t.message ?: "Could not load repository" }
         }
         available = ok; errors = bad
     }
@@ -116,19 +116,15 @@ fun ExtensionsScreen() {
         }
         item {
             Text("Choose your sources", style = MaterialTheme.typography.titleLarge)
-            Text("Extensions start off. Enable only those you want to use. Enabling an uninstalled source downloads third-party executable code; internet is required.",
+            Text("No sources are bundled. Install from your own repository, then enable only the extensions you trust. Extensions contain third-party executable code.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        items(defaults, key = { "default:${it.key}" }) { fallback ->
-            val entry = installed.firstOrNull { it.key == fallback.key } ?: fallback
-            ExtensionToggle(entry, installed.any { it.key == entry.key }, busy != null) { toggle(entry.key, it) }
+        if(installed.isEmpty())item {
+            Text("No extensions installed. Add a Cloudstream-compatible repository below and install the sources you choose.",
+                color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        val extraInstalled = installed.filter { entry -> defaults.none { it.key == entry.key } }
-        if (extraInstalled.isNotEmpty()) {
-            item { Text("Other installed extensions", style = MaterialTheme.typography.titleLarge) }
-            items(extraInstalled, key = { "installed:${it.key}" }) { entry ->
-                ExtensionToggle(entry, true, busy != null) { toggle(entry.key, it) }
-            }
+        items(installed,key={ "installed:${it.key}" }) { entry ->
+            ExtensionToggle(entry,true,busy!=null){toggle(entry.key,it)}
         }
         item {
             if (busy != null || AppPrefs.setupStatus.isNotBlank()) {
@@ -142,7 +138,7 @@ fun ExtensionsScreen() {
                 scope.launch {
                     try { Session.reload(context); readInstalled(); refresh++
                     } catch (cancel: CancellationException) { throw cancel
-                    } catch (t: Exception) { status = t.message
+                    } catch (t: Exception) { Diagnostics.failure("extensions.operation.error",t);status = t.message
                     } finally { busy = null }
                 }
             }) { Text("Reload enabled extensions") }
@@ -218,7 +214,7 @@ fun ExtensionsScreen() {
                                         }
                                         readInstalled(); refresh++
                                     } catch (cancel: CancellationException) { throw cancel
-                                    } catch (t: Exception) { status = "Install failed: ${t.message}"
+                                    } catch (t: Exception) { Diagnostics.failure("extensions.operation.error",t);status = "Install failed: ${t.message}"
                                     } finally { busy = null }
                                 }
                             }) { Text(if (current == null) "Install (disabled)" else "Update") }

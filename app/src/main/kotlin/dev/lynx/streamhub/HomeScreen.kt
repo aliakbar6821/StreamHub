@@ -106,7 +106,7 @@ fun HomeScreen(onOpen: (MediaItem) -> Unit, onSearch: () -> Unit, onExtensions: 
         } else if (Session.loaded && Session.extensions.isEmpty()) {
             item {
                 Text(
-                    "All extensions are off. Enable MovieBox, Anilight or another installed extension to begin.",
+                    "No enabled extensions. Add your own repository in Sources & extensions, install a trusted extension, then enable it to begin.",
                     modifier = Modifier.padding(16.dp),
                 )
                 OutlinedButton(onClick = onExtensions, modifier = Modifier.padding(horizontal = 16.dp)) {

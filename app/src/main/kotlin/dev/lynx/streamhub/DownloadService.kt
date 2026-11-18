@@ -22,9 +22,23 @@ class DownloadService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val watched = linkedSetOf<Long>()
     private var monitor: Job? = null
+    private var cpu: android.os.PowerManager.WakeLock?=null
+    private var renewAt=0L
+    private var wakeFailed=false
+    private fun keepCpuAwake() {
+        if(wakeFailed)return
+        runCatching {
+        val now=android.os.SystemClock.elapsedRealtime()
+        if(cpu==null)cpu=(getSystemService(Context.POWER_SERVICE) as android.os.PowerManager)
+            .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK,"streamHub:download").apply { setReferenceCounted(false) }
+        if(now>=renewAt || cpu?.isHeld!=true){cpu?.acquire(120_000L);renewAt=now+60_000L}
+        }.onFailure { wakeFailed=true;Diagnostics.failure("download.wakelock.unavailable",it) }
+    }
+    private fun releaseCpu(){runCatching { if(cpu?.isHeld==true)cpu?.release() };renewAt=0L}
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
         super.onCreate()
+        Diagnostics.event("download.service.create")
         DownloadNotifications.createChannel(this)
         Store.init(this)
     }
@@ -32,6 +46,7 @@ class DownloadService : Service() {
         ServiceCompat.startForeground(this, DownloadNotifications.SUMMARY_ID,
             DownloadNotifications.summary(this), if (Build.VERSION.SDK_INT >= 29)
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
+        Diagnostics.event("download.service.command",when(intent?.action){ PAUSE->"pause";RESUME->"resume";CANCEL->"cancel";else->"start" })
         val id = intent?.getLongExtra("download_id", -1L) ?: -1L
         if (id > 0) watched.add(id)
         val entry = Store.downloads.firstOrNull { it.downloadId == id }
@@ -55,15 +70,19 @@ class DownloadService : Service() {
                     DownloadNotifications.cancel(this@DownloadService, it); watched.remove(it)
                 }
                 if (!Downloader.hasActiveWork()) {
+                    releaseCpu()
                     ServiceCompat.stopForeground(this@DownloadService, ServiceCompat.STOP_FOREGROUND_REMOVE)
                     stopSelf(); break
                 }
+                keepCpuAwake()
                 delay(1000L)
             }
         }
         return START_NOT_STICKY
     }
     override fun onTimeout(startId: Int, fgsType: Int) {
+        Diagnostics.event("download.service.timeout")
+        releaseCpu()
         Downloader.pauseAll(this)
         Store.downloads.filter { it.downloadId in watched }.forEach {
             DownloadNotifications.update(this, it, Downloader.status(this, it.downloadId))
@@ -72,6 +91,8 @@ class DownloadService : Service() {
         stopSelf()
     }
     override fun onDestroy() {
+        Diagnostics.event("download.service.destroy")
+        releaseCpu()
         Downloader.pauseAll(this)
         serviceScope.cancel()
         super.onDestroy()

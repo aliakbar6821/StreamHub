@@ -8,7 +8,7 @@ object AppPrefs {
     private var prefs: SharedPreferences? = null
     var appearance by mutableStateOf("system")
     var enabledExtensions by mutableStateOf<Set<String>>(emptySet())
-    var extraExtensions by mutableStateOf(false)
+    var extraExtensions by mutableStateOf(true)
     var setupStatus by mutableStateOf("")
     fun init(context: Context) {
         AudioMetadataStore.init(context)
@@ -18,7 +18,7 @@ object AppPrefs {
         appearance = p.getString("appearance", "system") ?: "system"
         // Explicit opt-in. Legacy auto-enabled defaults are intentionally not migrated.
         enabledExtensions = p.getStringSet("enabled_extensions_v2", emptySet()).orEmpty().toSet()
-        extraExtensions = p.getBoolean("extra", false)
+        extraExtensions = p.getBoolean("extra", true)
     }
     fun save() {
         prefs?.edit()?.putString("appearance", appearance)

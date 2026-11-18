@@ -75,6 +75,7 @@ object Downloader {
         val id = d.downloadId
         val file = File(d.path)
         jobs[id] = scope.launch {
+            Diagnostics.event("download.start","id=$id host=${runCatching { URL(stream.url).host }.getOrDefault("unknown")}")
             try {
                 var failures = 0
                 while (true) {
@@ -123,19 +124,25 @@ object Downloader {
                         p.st = 4; save(app, id, p); setState(app, id, 4)
                     } catch (cancel: CancellationException) { throw cancel
                     } catch (io: IOException) {
+                        Diagnostics.failure("download.network.error",io)
                         save(app, id, p)
                         if (p.paused) continue
-                        if ((io is HttpFailure && !retryableHttp(io.code)) || failures >= 3) throw io
+                        val waitMs=downloadRetryDelay(io,failures,(io as? HttpFailure)?.code) ?: throw io
                         failures++
                         p.st = 1
-                        delay(1000L * (1L shl (failures - 1)))
+                        Diagnostics.event("download.retry","id=$id attempt=$failures waitMs=$waitMs savedBytes=${p.bytes}")
+                        delay(waitMs)
                     }
                 }
             } catch (cancel: CancellationException) { throw cancel
             } catch (t: Exception) {
+                Diagnostics.event("download.failed.context","id=$id savedBytes=${p.bytes} pct=${p.pct}")
+                Diagnostics.failure("download.failed",t)
                 p.st = 16; save(app, id, p); setState(app, id, 16)
                 app.getSharedPreferences("dl_errors", Context.MODE_PRIVATE).edit()
-                    .putString(id.toString(), (t.message ?: "Download failed").take(180)).apply()
+                    .putString(id.toString(), if(t is java.net.UnknownHostException)
+                        "Source host could not be resolved after retries. Check internet/private DNS or retry later; saved progress is kept."
+                        else (t.message ?: "Download failed").take(180)).apply()
             }
         }
     }
@@ -176,12 +183,14 @@ object Downloader {
     }
 
     private fun setState(c: Context, id: Long, st: Int) {
+        Diagnostics.event("download.state","id=$id state=$st")
         if (id in cancelled) return
         c.getSharedPreferences("dl_state", Context.MODE_PRIVATE).edit().putInt(id.toString(), st).apply()
     }
 
     /** Only verified self-contained sources or prepared audio/video plans can be queued. */
     fun enqueue(context: Context, item: MediaItem, ep: Episode, s: Stream, label: String = "", sourceName: String? = null): Boolean {
+        Diagnostics.event("download.enqueue.request")
         val mux = HlsDownloadPlans.get(s)
         if (mux == null && s.quality.orEmpty().contains("[MUX]", true)) return false
         if (Store.hasDownload(ep.id) || (mux == null && (ProviderPlayback.video(s.url).audio.isNotEmpty() ||
@@ -231,6 +240,7 @@ object Downloader {
         for ((index, part) in work.withIndex()) {
             checkpoint(owner)
             val (key, stream, file) = part
+            Diagnostics.event("download.component","id=$id leg=$key")
             val state = leg(c, id, key, owner)
             fun persist() {
                 if (id in cancelled) return
@@ -249,12 +259,14 @@ object Downloader {
             }
         }
         checkpoint(owner)
+        Diagnostics.event("download.mux.start","id=$id height=${plan.height}")
         OfflineMuxer.combine(video, audio, output, plan.height, { checkpoint(owner) }) { progress ->
             owner.pct = 90 + progress.coerceIn(0,100) * 8 / 100
             save(c, id, owner)
         }
     }
     private fun removeStaging(c: Context, id: Long) {
+        Diagnostics.event("download.staging.cleanup","id=$id")
         val roots = listOfNotNull(c.getExternalFilesDir("downloads"), File(c.filesDir, "downloads")).distinctBy { it.path }
         roots.forEach { File(it, ".partial/$id").deleteRecursively() }
         c.getSharedPreferences("dl_mux_progress", Context.MODE_PRIVATE).edit().remove("$id.v").remove("$id.a").apply()
@@ -517,6 +529,7 @@ object Downloader {
     fun pauseAll(context: Context) { progs.keys.toList().forEach { pause(context, it) } }
 
     fun remove(context: Context, d: DownloadEntry) {
+        Diagnostics.event("download.remove")
         val current = Store.downloads.firstOrNull { it.downloadId == d.downloadId } ?: d
         cancelled.add(d.downloadId)
         val job = jobs.remove(d.downloadId)
