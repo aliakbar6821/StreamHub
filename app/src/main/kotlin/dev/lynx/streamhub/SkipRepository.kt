@@ -39,7 +39,7 @@ object SkipRepository {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 6000; connection.readTimeout = 6000
-            connection.setRequestProperty("User-Agent", "streamHub/0.2.13")
+            connection.setRequestProperty("User-Agent", "streamHub/0.2.14")
             if (body != null) {
                 connection.requestMethod = "POST"; connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json")
@@ -60,17 +60,39 @@ object SkipRepository {
             }
         } finally { connection.disconnect() }
     }
-    suspend fun fetch(item: MediaItem, episode: Float, durationMs: Long, force: Boolean = false): Result = withContext(Dispatchers.IO) {
-        if (item.type != MediaType.ANIME) return@withContext Result(emptyList(),
-            "Automatic matching currently supports anime. Set exact markers below for this video.")
+    data class Candidate(val id: Int, val title: String, val description: String)
+    fun searchTitle(title: String): String = title
+        .replace(Regex("(?i)\\s+S\\d+\\s*[-–]\\s*S?\\d+.*$"), "")
+        .replace(Regex("(?i)\\s+(?:season\\s*|S)\\d+\\s*$"), "").trim()
+    suspend fun search(title: String): List<Candidate> = withContext(Dispatchers.IO) {
+        require(title.isNotBlank() && title.length <= 200) { "Enter a title (up to 200 characters)" }
+        val query = "query(\$s:String){Page(perPage:15){media(search:\$s,type:ANIME){idMal seasonYear format episodes title{romaji english native}}}}"
+        val body = JSONObject().put("query", query).put("variables", JSONObject().put("s", title)).toString()
+        val rows=request("https://graphql.anilist.co",body).optJSONObject("data")?.optJSONObject("Page")?.optJSONArray("media")
+            ?: return@withContext emptyList()
+        currentCoroutineContext().ensureActive()
+        (0 until rows.length()).mapNotNull { i ->
+            val node=rows.optJSONObject(i) ?: return@mapNotNull null
+            val id=node.optInt("idMal").takeIf { it>0 } ?: return@mapNotNull null
+            val names=node.optJSONObject("title") ?: return@mapNotNull null
+            val name=listOf("english","romaji","native").map { names.optString(it) }.firstOrNull { it.isNotBlank() && it!="null" }
+                ?: return@mapNotNull null
+            Candidate(id,name,listOfNotNull(node.optInt("seasonYear").takeIf { it>0 }?.toString(),
+                node.optString("format").takeIf { it.isNotBlank() && it!="null" },
+                node.optInt("episodes").takeIf { it>0 }?.let { "$it episodes" }).joinToString(" · "))
+        }.distinctBy { it.id }
+    }
+    suspend fun fetch(item: MediaItem, episode: Float, durationMs: Long, force: Boolean = false, malOverride: Int? = null): Result = withContext(Dispatchers.IO) {
+        if (item.type != MediaType.ANIME && malOverride == null) return@withContext Result(emptyList(),
+            "No provider timestamps matched. For an anime listed as TV, choose its title/season below. Other videos can use exact markers.")
         if (!episode.isFinite() || episode <= 0 || durationMs <= 0) return@withContext Result(emptyList(), "Episode timing unavailable.")
-        val key = "${item.title}|${item.year}|$episode|$durationMs"
+        val key = "${item.title}|${item.year}|$episode|$durationMs|$malOverride"
         if (force) synchronized(cache) { cache.remove(key) }
         synchronized(cache) { cache[key] }?.let { return@withContext it }
         try {
             val query = "query(\$s:String){Page(perPage:10){media(search:\$s,type:ANIME){idMal seasonYear title{romaji english native} synonyms}}}"
             val body = JSONObject().put("query", query).put("variables", JSONObject().put("s", item.title)).toString()
-            val mal = matchMal(request("https://graphql.anilist.co", body), item)
+            val mal = malOverride?.takeIf { it > 0 } ?: matchMal(request("https://graphql.anilist.co", body), item)
                 ?: return@withContext Result(emptyList(), "No unambiguous title match. No guessed skip times.")
             currentCoroutineContext().ensureActive()
             val number = java.math.BigDecimal(episode.toString()).stripTrailingZeros().toPlainString()

@@ -205,9 +205,13 @@ fun DownloadSheet(
             Text("Save to Downloads/streamHub/${safeDownloadName(media.title, spaces = true)}",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 16.dp))
+            val separateAudio = picked?.let { ProviderPlayback.video(it.url).audio.isNotEmpty() } == true
+            if (separateAudio) Text("This source has separate audio. Streaming is supported, but saving one combined file needs muxing. Choose a combined audio/video stream to download.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 12.dp))
             Row(Modifier.padding(top = 22.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f).height(50.dp)) { Text("Cancel") }
-                Button(enabled = picked != null, modifier = Modifier.weight(1f).height(50.dp), onClick = {
+                Button(enabled = picked != null && !separateAudio, modifier = Modifier.weight(1f).height(50.dp), onClick = {
                     picked?.let { stream ->
                         val choice = streamChoice(stream)
                         val label = listOfNotNull(choice.audioLabel, choice.height?.let { "${it}p" }).joinToString(" · ")

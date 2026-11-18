@@ -201,6 +201,8 @@ object CsHost {
     @Synchronized
     fun extensions(c: Context): List<Extension> {
         val app = c.applicationContext
+        if (com.lagradost.cloudstream3.LoadResponse.malIdPrefix.isBlank()) com.lagradost.cloudstream3.LoadResponse.malIdPrefix = "mal"
+        if (com.lagradost.cloudstream3.LoadResponse.aniListIdPrefix.isBlank()) com.lagradost.cloudstream3.LoadResponse.aniListIdPrefix = "anilist"
         CloudStreamApp.setContext(app)
         val before = loaded.size
         val activeFiles = dir(app).listFiles().orEmpty().filter {
@@ -312,6 +314,8 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
                 val label = e.name?.takeIf { it.isNotBlank() }
                     ?: ("Episode " + (e.episode ?: (i + 1)))
                 val s = e.season
+                ProviderPlayback.rememberEpisode(this@CsExtension.id, e.data, s,
+                    e.episode?.toFloat() ?: (i + 1).toFloat(), lr.syncData)
                 ShEpisode(
                     id = e.data,
                     number = e.episode?.toFloat() ?: (i + 1).toFloat(),
@@ -327,7 +331,11 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
         if (dubRaw.isNotEmpty()) {
             dubs[id] = dubRaw.mapIndexed { i, e ->
                 val label = e.name?.takeIf { it.isNotBlank() } ?: ("Episode " + (e.episode ?: (i + 1)))
-                ShEpisode(id = e.data, number = e.episode?.toFloat() ?: (i + 1).toFloat(), title = cleanMediaText(label), thumbnail = e.posterUrl)
+                val season = e.season
+                ProviderPlayback.rememberEpisode(this@CsExtension.id, e.data, season,
+                    e.episode?.toFloat() ?: (i + 1).toFloat(), lr.syncData)
+                ShEpisode(id = e.data, number = e.episode?.toFloat() ?: (i + 1).toFloat(),
+                    title = cleanMediaText(if (season != null && season > 1) "S$season · $label" else label), thumbnail = e.posterUrl)
             }
         } else {
             dubs.remove(id)
@@ -388,6 +396,7 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
                             val h = HashMap<String, String>(hs.orEmpty())
                             if (!ref.isNullOrBlank() && h.keys.none { it.equals("Referer", true) }) h["Referer"] = ref
                             val q = if (l.quality > 0) l.quality.toString() + "p" else null
+                            ProviderPlayback.capture(l, l.url, h)
                             count++
                             onStream(AudioMetadataStore.enrich(id, name, episodeId,
                                 ShStream(url = l.url, quality = listOfNotNull(l.name, q).joinToString(" "), headers = h)))
@@ -409,12 +418,14 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
     }
 
     override suspend fun getStreams(episodeId: String): List<ShStream> = withContext(Dispatchers.IO) {
+        requireEnabled()
         val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
         val job = CoroutineScope(SupervisorJob() + Dispatchers.IO).async {
             runCatching { api.loadLinks(episodeId, false, { }, { l -> links.add(l) }) }
         }
         val t0 = System.currentTimeMillis()
         var firstAt = 0L
+        try {
         while (job.isActive) {
             delay(250)
             val t = System.currentTimeMillis()
@@ -422,8 +433,8 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
             if (firstAt != 0L && t - firstAt > 5000) break
             if (t - t0 > 60000) break
         }
-        job.cancel()
-        links.toList()
+        } finally { job.cancel() }
+        synchronized(links) { links.toList() }
             .filter { it.url.isNotBlank() }
             .sortedByDescending { it.quality }
             .map { l ->
@@ -432,11 +443,12 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
                 val h = HashMap<String, String>(hs.orEmpty())
                 if (!ref.isNullOrBlank() && h.keys.none { it.equals("Referer", true) }) h["Referer"] = ref
                 val q = if (l.quality > 0) l.quality.toString() + "p" else null
-                ShStream(
+                ProviderPlayback.capture(l, l.url, h)
+                AudioMetadataStore.enrich(id, name, episodeId, ShStream(
                     url = l.url,
                     quality = listOfNotNull(l.name, q).joinToString(" "),
                     headers = h,
-                )
+                ))
             }
     }
 }

@@ -172,9 +172,9 @@ object Downloader {
         c.getSharedPreferences("dl_state", Context.MODE_PRIVATE).edit().putInt(id.toString(), st).apply()
     }
 
-    /** Returns false if this episode was already downloaded. */
+    /** False means duplicate, access unavailable, or a separate-audio stream needing offline muxing. */
     fun enqueue(context: Context, item: MediaItem, ep: Episode, s: Stream, label: String = "", sourceName: String? = null): Boolean {
-        if (Store.hasDownload(ep.id)) return false
+        if (Store.hasDownload(ep.id) || ProviderPlayback.video(s.url).audio.isNotEmpty()) return false
         val app = context.applicationContext
         if (!DownloadAccess.canSavePublic(app)) return false
         val id = newId()

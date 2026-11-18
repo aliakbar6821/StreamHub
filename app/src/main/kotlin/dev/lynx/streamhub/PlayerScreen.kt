@@ -336,6 +336,20 @@ fun PlayerScreen(
     var subFont by remember { mutableStateOf(PlayerPrefs.subFont) }
     var subBold by remember { mutableStateOf(PlayerPrefs.subBold) }
     var subPos by remember { mutableFloatStateOf(PlayerPrefs.subPos) }
+    var episodeMetadataRevision by remember(req.item.id) { mutableIntStateOf(0) }
+    var streamMetadataRevision by remember(ep.id) { mutableIntStateOf(0) }
+    val providerKey = (req.ext ?: Store.ownerOf(req.item.id))?.id.orEmpty()
+    val episodeContext = remember(ep.id, providerKey, episodeMetadataRevision) { ProviderPlayback.episode(providerKey, ep.id) }
+    val currentSeason = episodeContext?.season ?: Regex("^S(\\d+)\\s*[·:]").find(ep.title.orEmpty())
+        ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+    val matchKey = SkipMatchStore.key(providerKey, req.item.id, currentSeason)
+    var animeMatch by remember(matchKey) { mutableStateOf(SkipMatchStore.load(context, matchKey)) }
+    var matchQuery by remember(matchKey) { mutableStateOf(SkipRepository.searchTitle(req.item.title)) }
+    var matchCandidates by remember(matchKey) { mutableStateOf<List<SkipRepository.Candidate>>(emptyList()) }
+    var matchSearch by remember(matchKey) { mutableIntStateOf(0) }
+    var matchSearchStatus by remember(matchKey) { mutableStateOf("") }
+    var matchEpisode by remember(ep.id, episodeMetadataRevision) { mutableStateOf((episodeContext?.number ?: ep.number).toString()) }
+    var appliedMatchEpisode by remember(ep.id, episodeMetadataRevision) { mutableFloatStateOf(episodeContext?.number ?: ep.number) }
     val skipSource = req.localPath ?: streams.getOrNull(sourceIdx)?.url.orEmpty()
     val skipIdentity = ep.id + "|" + skipSource
     var detectedSegments by remember(skipIdentity) { mutableStateOf<List<SkipSegment>>(emptyList()) }
@@ -371,6 +385,7 @@ fun PlayerScreen(
     }
     val exo = remember {
         ExoPlayer.Builder(context)
+            .setRenderersFactory(androidx.media3.exoplayer.DefaultRenderersFactory(context).setEnableDecoderFallback(true))
             .setLoadControl(androidx.media3.exoplayer.DefaultLoadControl.Builder()
                 .setBufferDurationsMs(15_000, 50_000, 1_500, 3_000).build())
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http))
@@ -395,6 +410,19 @@ fun PlayerScreen(
     }
     val audioMgr = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val volAcc = remember { floatArrayOf(-1f) }
+    val outputGuard = remember(exo) { AudioOutputGuard(context, exo) }
+    var audioReport by remember { mutableStateOf("") }
+    DisposableEffect(outputGuard) {
+        outputGuard.start()
+        onDispose { outputGuard.close() }
+    }
+
+    fun setPlayerItem(item: M3Item, position: Long = 0L) {
+        val stream = streams.getOrNull(sourceIdx)
+        if (req.localPath == null && stream != null) {
+            exo.setMediaSource(PlaybackSources.create(context, item, stream), position)
+        } else exo.setMediaItem(item, position)
+    }
 
     fun syncPlayback() {
         playbackIntent.pictureInPicture = PlayerWindowState.inPip
@@ -627,7 +655,7 @@ fun PlayerScreen(
                 .build()
             val pos = exo.currentPosition
             tweak { it.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false) }
-            exo.setMediaItem(cur.buildUpon().setSubtitleConfigurations(
+            setPlayerItem(cur.buildUpon().setSubtitleConfigurations(
                 (cur.localConfiguration?.subtitleConfigurations.orEmpty() +
                     listOf(sub)).distinctBy { it.uri.toString() }
             ).build(), pos)
@@ -739,6 +767,7 @@ fun PlayerScreen(
             try {
                 withContext(Dispatchers.IO) { e.getDetails(req.item.id) }.let { details ->
                     titleGenres = details.item.genres
+                    episodeMetadataRevision++
                     details.episodes
                 }
             } catch (cancel: CancellationException) { throw cancel
@@ -761,6 +790,7 @@ fun PlayerScreen(
             buffering = true
             qualityH = -1
             exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
                 .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
                 .clearOverridesOfType(C.TRACK_TYPE_TEXT)
                 .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
@@ -811,6 +841,7 @@ fun PlayerScreen(
                 }
                 for (s in ch) {
                     if (streams.none { it.url == s.url }) streams = streams + s
+                    streamMetadataRevision++
                 }
             } else {
                 streams = withContext(Dispatchers.IO) { e.getStreams(ep.id) }
@@ -864,7 +895,7 @@ fun PlayerScreen(
                     .distinctBy { it.uri.toString() }
                 if (merged != existing) {
                     val position = exo.currentPosition.coerceAtLeast(0L)
-                    exo.setMediaItem(
+                    setPlayerItem(
                         current.buildUpon()
                             .setSubtitleConfigurations(merged).build(),
                         position,
@@ -901,11 +932,12 @@ fun PlayerScreen(
                     (streamChoice(s).height?.let { " · ${it}p" } ?: "")
                 tracks = Tracks.EMPTY
                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
                     .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
                     .clearOverridesOfType(C.TRACK_TYPE_TEXT)
                     .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
                     .build()
-                exo.setMediaItem(b.build())
+                setPlayerItem(b.build())
             }
             if (pendingStart > 0L) exo.seekTo(pendingStart)
             pendingStart = 0L
@@ -938,16 +970,37 @@ fun PlayerScreen(
     LaunchedEffect(speed) { exo.setPlaybackSpeed(speed) }
 
     // Match once a prepared file has a stable duration. Episode/source changes cancel late results.
-    LaunchedEffect(skipIdentity, skipPrompts, durMs / 1000L, skipRetry, streamsFor) {
+    LaunchedEffect(skipIdentity, skipPrompts, durMs / 1000L, skipRetry, streamsFor,
+        episodeMetadataRevision, streamMetadataRevision, animeMatch, appliedMatchEpisode) {
         detectedSegments = emptyList(); promptSegment = null
         if (!skipPrompts) { skipStatus = "Intro/outro prompts are off."; return@LaunchedEffect }
         if (skipSource.isBlank() || durMs <= 0 || (req.localPath == null && streamsFor != ep.id)) return@LaunchedEffect
         manualSegments = SkipMarkerStore.load(context, ep.id, skipSource, durMs)
         delay(1000L)
         skipStatus = "Looking for matching episode timestamps…"
-        val result = SkipRepository.fetch(req.item, ep.number, durMs, force = skipRetry > 0)
-        detectedSegments = result.segments
-        skipStatus = result.message
+        val supplied = (ProviderPlayback.video(skipSource).segments + episodeContext?.segments.orEmpty())
+            .filter { SkipSegments.valid(it, durMs) }.distinct()
+            .groupBy { it.kind }.values.mapNotNull { it.singleOrNull() }
+        detectedSegments = supplied
+        if (supplied.map { it.kind }.toSet().containsAll(setOf("op", "ed"))) {
+            skipStatus = "Provider intro/outro timestamps loaded for this video."
+            return@LaunchedEffect
+        }
+        // A show-wide MAL ID is unsafe for season 2+ unless the user confirms that season.
+        val mal = animeMatch?.first ?: episodeContext?.malId?.takeIf { currentSeason <= 1 }
+        val result = SkipRepository.fetch(req.item, appliedMatchEpisode, durMs, force = skipRetry > 0, malOverride = mal)
+        detectedSegments = supplied + result.segments.filter { range -> supplied.none { it.kind == range.kind } }
+        skipStatus = if (supplied.isEmpty()) result.message else "Provider timestamps loaded. " + result.message
+    }
+
+    LaunchedEffect(matchKey, matchSearch) {
+        if (matchSearch <= 0) return@LaunchedEffect
+        matchCandidates = emptyList(); matchSearchStatus = "Searching anime seasons…"
+        try {
+            matchCandidates = SkipRepository.search(matchQuery)
+            matchSearchStatus = if (matchCandidates.isEmpty()) "No anime titles found." else "Choose the actual season, not just the first result."
+        } catch (cancel: CancellationException) { throw cancel
+        } catch (_: Exception) { matchSearchStatus = "Search unavailable. Retry or use exact markers." }
     }
 
     LaunchedEffect(skipIdentity, posMs, isPlaying, locked, page, PlayerWindowState.inPip, skipPrompts, mergedSegments) {
@@ -1540,8 +1593,37 @@ fun PlayerScreen(
                                     } }
                                     item { Text(skipStatus, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(16.dp)) }
-                                    item { Text("Prompts never seek automatically. Matching uses AniList/AniSkip title, episode and file length, not video analysis. No match means no guessed jump. Movies and other series can use exact markers below.",
+                                    item { Text("Prompts never seek automatically. Provider timestamps are preferred, then compatible AniSkip data. For bundled TV titles, choose the correct anime season below. No timestamps means no guessed jump.",
                                         color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+                                    item { Text("Season $currentSeason · provider episode ${episodeContext?.number ?: ep.number}",
+                                        modifier = Modifier.padding(16.dp)) }
+                                    item { androidx.compose.material3.OutlinedTextField(value = matchQuery,
+                                        onValueChange = { matchQuery = it.take(200) }, label = { Text("Anime title / season") },
+                                        singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
+                                    item { OptionRow("Find anime title / season", animeMatch?.second ?: "Choose once for this provider title and season") { matchSearch++ } }
+                                    if (matchSearchStatus.isNotBlank()) item { Text(matchSearchStatus,
+                                        modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                    matchCandidates.forEach { candidate ->
+                                        item { OptionRow(candidate.title, candidate.description, selected = animeMatch?.first == candidate.id) {
+                                            animeMatch = candidate.id to candidate.title
+                                            SkipMatchStore.save(context, matchKey, candidate.id, candidate.title)
+                                            skipRetry++; matchCandidates = emptyList()
+                                        } }
+                                    }
+                                    if (animeMatch != null) {
+                                        item { androidx.compose.material3.OutlinedTextField(value = matchEpisode,
+                                            onValueChange = { matchEpisode = it.take(12) }, label = { Text("Episode number within selected season") },
+                                            singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
+                                        item { OptionRow("Apply episode number", "For this playback only; other episodes keep their provider numbering") {
+                                            val number = matchEpisode.toFloatOrNull()
+                                            if (number != null && number.isFinite() && number > 0) {
+                                                appliedMatchEpisode = number; skipRetry++
+                                            } else showHud("Enter a valid positive episode number")
+                                        } }
+                                        item { OptionRow("Clear anime season match", "Does not delete your exact markers") {
+                                            animeMatch = null; SkipMatchStore.clear(context, matchKey); skipRetry++
+                                        } }
+                                    }
                                     item { OptionRow("Retry matching", "Reload timestamps for this video") { skipRetry++ } }
                                     mergedSegments.forEach { segment ->
                                         item { OptionRow("${segment.label.replaceFirstChar { it.uppercase() }} · ${fmt(segment.startMs)} – ${fmt(segment.endMs)}",
@@ -1649,6 +1731,22 @@ fun PlayerScreen(
                                 }
 
                                 "output" -> {
+                                    item { OptionRow("Reset audio output", "Rebuild audio on Android's selected route; keep position") {
+                                        outputGuard.reset(true)
+                                        audioReport = outputGuard.report()
+                                        showHud("Audio output reset; system media volume unchanged")
+                                    } }
+                                    item { OptionRow("Refresh audio diagnostics", "No playback URLs or account data") {
+                                        val rows = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }.flatMap { group ->
+                                            (0 until group.length).map { i ->
+                                                val f = group.getTrackFormat(i)
+                                                "${f.sampleMimeType ?: "unknown codec"} · ${f.language ?: "und"} · selected=${group.isTrackSelected(i)} · supported=${group.isTrackSupported(i)}"
+                                            }
+                                        }
+                                        audioReport = outputGuard.report() + "\n" + rows.joinToString("\n").ifBlank { "No embedded/merged audio tracks reported." }
+                                    } }
+                                    if (audioReport.isNotBlank()) item { Text(audioReport,
+                                        modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                                     item {
                                         Text(
                                             "Playback uses Android's current media output. " +
