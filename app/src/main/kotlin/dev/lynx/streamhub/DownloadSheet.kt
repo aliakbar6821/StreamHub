@@ -179,8 +179,8 @@ fun DownloadSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 10.dp))
                 }
-                Text("Downloads keep the selected file's embedded tracks. External subtitle files are not bundled. " +
-                    "Multi-track audio is not remuxed into a single language.",
+                Text("Separate HLS audio/video is combined into MP4 with the selected audio. External subtitles are not bundled. " +
+                    "Self-contained files retain their embedded tracks.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 14.dp))
@@ -200,7 +200,7 @@ fun DownloadSheet(
             Text("Save to Downloads/streamHub/${safeDownloadName(media.title, spaces = true)}",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 16.dp))
-            val separateAudio = picked?.let { ProviderPlayback.video(it.url).audio.isNotEmpty() } == true
+            val separateAudio = picked?.let { HlsDownloadPlans.get(it) == null && ProviderPlayback.video(it.url).audio.isNotEmpty() } == true
             if (separateAudio) Text("This source has separate audio. Streaming is supported, but saving one combined file needs muxing. Choose a combined audio/video stream to download.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 12.dp))

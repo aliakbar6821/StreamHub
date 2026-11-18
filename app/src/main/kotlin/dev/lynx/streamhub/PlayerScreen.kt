@@ -295,7 +295,6 @@ fun PlayerScreen(
     var attempt by remember { mutableIntStateOf(0) }
     var hlsIdx by remember { mutableIntStateOf(-1) }
     var reloadKey by remember { mutableIntStateOf(0) }
-    var srcInfo by remember { mutableStateOf("") }
     var episodes by remember { mutableStateOf<List<Episode>>(emptyList()) }
     var titleGenres by remember(req.item.id) { mutableStateOf(req.item.genres) }
     var related by remember(req.item.id) { mutableStateOf<List<dev.lynx.streamhub.api.MediaItem>>(emptyList()) }
@@ -648,9 +647,7 @@ fun PlayerScreen(
                 if (parse && hlsIdx != sourceIdx && !u.contains("m3u8", true)) {
                     hlsIdx = sourceIdx
                     attempt++
-                } else if (tryCompatibleVariant()) {
-                    srcInfo = "Trying another file for the same audio language…"
-                } else {
+                } else if (!tryCompatibleVariant()) {
                     error = "Playback failed for this language/quality. Retry or choose another available option. " + m.take(180)
                 }
             }
@@ -749,14 +746,6 @@ fun PlayerScreen(
             error = "Enable this title’s extension in You > Sources & extensions."
             return@LaunchedEffect
         }
-        val t0 = System.currentTimeMillis()
-        val ticker = launch {
-            while (streams.isEmpty()) {
-                val secs = (System.currentTimeMillis() - t0) / 1000
-                srcInfo = "Finding sources... ${secs}s" + (if (secs > 20) "\nSlow plugin. Go back and try another one if this keeps going." else "")
-                delay(1000)
-            }
-        }
         fun acceptSource(stream: Stream) {
             if (reloadKey > 0) VerifiedStreams.invalidate(stream)
             if (streams.none { it.url == stream.url }) streams = streams + stream
@@ -821,7 +810,6 @@ fun PlayerScreen(
                 (t.message ?: t.javaClass.simpleName).take(240)
         } finally {
             discovering = false
-            ticker.cancel()
         }
     }
 
@@ -896,9 +884,6 @@ fun PlayerScreen(
                 val b = M3Item.Builder().setUri(s.url)
                     .setSubtitleConfigurations(remoteSubtitleConfigs())
                 if (hlsIdx == sourceIdx || s.url.contains("m3u8", true)) b.setMimeType(MimeTypes.APPLICATION_M3U8)
-                val provider = providerDisplayName((req.ext ?: Store.ownerOf(req.item.id))?.name)
-                srcInfo = "$provider · Video ${sourceIdx + 1} of ${streams.size}" +
-                    (streamChoice(s).height?.let { " · ${it}p" } ?: "")
                 tracks = Tracks.EMPTY
                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                     .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
@@ -1302,13 +1287,7 @@ fun PlayerScreen(
         }
 
         if (!inPip && (buffering || (streams.isEmpty() && req.localPath == null)) && error == null) {
-            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(color = Color.White)
-                if (srcInfo.isNotEmpty() && req.localPath == null) {
-                    Spacer(Modifier.height(12.dp))
-                    Text(srcInfo, color = Color.White, fontSize = 13.sp)
-                }
-            }
+            CircularProgressIndicator(color = Color.White, modifier = Modifier.align(Alignment.Center))
         }
 
         hud?.let {

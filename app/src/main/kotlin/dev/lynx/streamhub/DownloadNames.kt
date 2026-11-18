@@ -21,6 +21,7 @@ internal fun safeDownloadName(value: String, spaces: Boolean = false): String {
 }
 
 internal fun downloadExtension(stream: Stream): String {
+    if (HlsDownloadPlans.get(stream) != null) return "mp4"
     if (isHls(stream)) return "ts"
     val extension = stream.url.substringBefore('?').substringBefore('#').substringAfterLast('/')
         .substringAfterLast('.', "mp4").lowercase(Locale.ROOT)

@@ -30,7 +30,7 @@ object VerifiedStreams {
         .joinToString("") { "%02x".format(it.toInt() and 255) }
     @Synchronized fun cached(stream: Stream): Result? {
         val entry=cache[key(stream)] ?: return null
-        val ttl=if(entry.result.complete) 300_000L else 30_000L
+        val ttl=if(entry.result.videoSupported || entry.result.audio.any { it.supported }) 300_000L else 30_000L
         return entry.result.takeIf { System.currentTimeMillis()-entry.at in 0..ttl }
     }
     @Synchronized fun invalidate(stream: Stream) { cache.remove(key(stream)) }

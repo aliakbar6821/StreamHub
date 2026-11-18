@@ -39,13 +39,13 @@ object Downloader {
     private class Prog(@Volatile var st: Int = 2, @Volatile var pct: Int = 0,
         @Volatile var bytes: Long = 0L, @Volatile var total: Long = -1L,
         @Volatile var paused: Boolean = false, var validator: String = "",
-        var segments: Int = 0, var fingerprint: String = "", var readyToPublish: Boolean = false)
+        var segments: Int = 0, var fingerprint: String = "", var readyToPublish: Boolean = false, var parent: Prog? = null)
     private class PauseSignal : IOException()
     private class HttpFailure(val code: Int) : IOException("Server said HTTP $code")
     private val slots = Semaphore(2)
     private val requests = ConcurrentHashMap<Long, Stream>()
     private val cancelled = ConcurrentHashMap.newKeySet<Long>()
-    private fun checkpoint(p: Prog) { if (p.paused) throw PauseSignal() }
+    private fun checkpoint(p: Prog) { if (p.paused || p.parent?.paused == true) throw PauseSignal() }
     private fun save(c: Context, id: Long, p: Prog) {
         if (id in cancelled) return
         c.getSharedPreferences("dl_progress", Context.MODE_PRIVATE).edit()
@@ -86,7 +86,9 @@ object Downloader {
                             checkpoint(p)
                             p.st = 2
                             if (!p.readyToPublish || !file.exists() || file.length() != p.bytes) {
-                                if (isHls(stream)) hls(p, stream.url, stream.headers, file) { save(app, id, p) }
+                                val mux = HlsDownloadPlans.restore(app, id)
+                                if (mux != null) paired(app, id, p, mux, file)
+                                else if (isHls(stream)) hls(p, stream.url, stream.headers, file) { save(app, id, p) }
                                 else direct(p, stream.url, stream.headers, file) { save(app, id, p) }
                                 p.readyToPublish = true; p.bytes = file.length(); p.total = p.bytes
                                 save(app, id, p)
@@ -104,6 +106,7 @@ object Downloader {
                                 if (id in cancelled) throw CancellationException("Download removed")
                                 DownloadFiles.committed(app, id)
                                 file.delete()
+                                removeStaging(app, id)
                                 p.pct = 100; p.st = 8; p.total = p.bytes
                                 save(app, id, p); setState(app, id, 8)
                             }
@@ -174,11 +177,13 @@ object Downloader {
 
     /** False means duplicate, access unavailable, or a separate-audio stream needing offline muxing. */
     fun enqueue(context: Context, item: MediaItem, ep: Episode, s: Stream, label: String = "", sourceName: String? = null): Boolean {
-        if (Store.hasDownload(ep.id) || ProviderPlayback.video(s.url).audio.isNotEmpty() ||
-            VerifiedStreams.cached(s)?.complete != true) return false
+        val mux = HlsDownloadPlans.get(s)
+        if (Store.hasDownload(ep.id) || (mux == null && (ProviderPlayback.video(s.url).audio.isNotEmpty() ||
+            VerifiedStreams.cached(s)?.complete != true))) return false
         val app = context.applicationContext
         if (!DownloadAccess.canSavePublic(app)) return false
         val id = newId()
+        if (mux != null && runCatching { HlsDownloadPlans.persist(app, id, mux) }.isFailure) return false
         val name = readableDownloadName(item, ep, s)
         val folder = safeDownloadName(item.title, spaces = true)
         val root = app.getExternalFilesDir("downloads") ?: File(app.filesDir, "downloads")
@@ -204,6 +209,49 @@ object Downloader {
         if (!DownloadService.ensureRunning(app, id)) { remove(app, entry); return false }
         start(app, entry, s, p)
         return true
+    }
+
+    private fun leg(c: Context, id: Long, key: String, owner: Prog): Prog {
+        val raw = c.getSharedPreferences("dl_mux_progress", Context.MODE_PRIVATE).getString("$id.$key", null)
+        val j = runCatching { JSONObject(raw ?: "{}") }.getOrDefault(JSONObject())
+        return Prog(bytes = j.optLong("bytes", 0), total = j.optLong("total", -1), pct = j.optInt("pct", 0),
+            validator = j.optString("validator"), segments = j.optInt("segments", 0),
+            fingerprint = j.optString("fingerprint"), readyToPublish = j.optBoolean("ready", false), parent = owner)
+    }
+    private suspend fun paired(c: Context, id: Long, owner: Prog, plan: HlsDownloadPlans.Plan, output: File) {
+        val video = File(output.parentFile, "video.component")
+        val audio = File(output.parentFile, "audio.component")
+        val work = listOf(Triple("v", plan.video, video), Triple("a", plan.audio, audio))
+        for ((index, part) in work.withIndex()) {
+            checkpoint(owner)
+            val (key, stream, file) = part
+            val state = leg(c, id, key, owner)
+            fun persist() {
+                if (id in cancelled) return
+                val j = JSONObject().put("bytes", state.bytes).put("total", state.total).put("pct", state.pct)
+                    .put("validator", state.validator).put("segments", state.segments)
+                    .put("fingerprint", state.fingerprint).put("ready", state.readyToPublish)
+                c.getSharedPreferences("dl_mux_progress", Context.MODE_PRIVATE).edit().putString("$id.$key", j.toString()).apply()
+                owner.bytes = video.length() + audio.length(); owner.total = -1
+                owner.pct = index * 45 + state.pct.coerceIn(0,100) * 45 / 100
+                save(c, id, owner)
+            }
+            if (!state.readyToPublish || !file.exists() || state.bytes != file.length()) {
+                if (isHls(stream)) hls(state, stream.url, stream.headers, file) { persist() }
+                else direct(state, stream.url, stream.headers, file) { persist() }
+                state.readyToPublish = true; state.bytes = file.length(); state.pct = 100; persist()
+            }
+        }
+        checkpoint(owner)
+        OfflineMuxer.combine(video, audio, output, plan.height, { checkpoint(owner) }) { progress ->
+            owner.pct = 90 + progress.coerceIn(0,100) * 8 / 100
+            save(c, id, owner)
+        }
+    }
+    private fun removeStaging(c: Context, id: Long) {
+        val roots = listOfNotNull(c.getExternalFilesDir("downloads"), File(c.filesDir, "downloads")).distinctBy { it.path }
+        roots.forEach { File(it, ".partial/$id").deleteRecursively() }
+        c.getSharedPreferences("dl_mux_progress", Context.MODE_PRIVATE).edit().remove("$id.v").remove("$id.a").apply()
     }
 
     // ---------- network helpers ----------
@@ -342,6 +390,8 @@ object Downloader {
             pl = resolveUrl(pl, bestUri ?: throw Exception("Empty playlist"))
             body = fetchText(pl, headers)
         }
+        if (p.parent != null && body.lineSequence().any { it.trim() == "#EXT-X-DISCONTINUITY" })
+            throw IllegalArgumentException("Discontinuous audio/video playlists cannot currently be combined safely")
         if (!body.contains("#EXT-X-ENDLIST")) throw Exception("Live playlists cannot be downloaded safely")
         if (body.contains("#EXT-X-MAP") && body.contains("#EXT-X-KEY"))
             throw Exception("Encrypted initialization segments are not supported")
@@ -456,7 +506,7 @@ object Downloader {
             job?.cancelAndJoin()
             DownloadFiles.abortPending(context, d.downloadId)
             runCatching { DownloadFiles.delete(context, current.path) }
-            File(current.path).parentFile?.takeIf { it.name == d.downloadId.toString() }?.delete()
+            removeStaging(context, d.downloadId)
             progs.remove(d.downloadId)
             val progress = context.getSharedPreferences("dl_progress", Context.MODE_PRIVATE).edit()
             listOf("bytes", "total", "pct", "validator", "segments", "fingerprint", "ready").forEach { progress.remove("${d.downloadId}.$it") }
@@ -467,7 +517,7 @@ object Downloader {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             runCatching { dm.remove(d.downloadId) }
         }
-        listOf("dl_state", "dl_requests", "dl_source", "dl_meta", "dl_errors").forEach { name ->
+        listOf("dl_state", "dl_requests", "dl_source", "dl_meta", "dl_errors", "dl_mux").forEach { name ->
             context.getSharedPreferences(name, Context.MODE_PRIVATE).edit().remove(d.downloadId.toString()).apply()
         }
         context.getSharedPreferences("dl_names", Context.MODE_PRIVATE).edit()

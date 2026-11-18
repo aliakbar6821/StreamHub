@@ -8,6 +8,8 @@ import dev.lynx.streamhub.api.Stream
 @UnstableApi
 object DownloadVerification {
     suspend fun options(context:Context, stream:Stream):Pair<List<Stream>,String?> {
+        val paired = HlsDownloadPlans.options(context, stream)
+        if (paired != null) return paired
         if(ProviderPlayback.video(stream.url).audio.isNotEmpty()) return emptyList<Stream>() to
             "Separate-audio playback source: one offline file requires muxing. No silent video-only download will be queued."
         val (variants,warning)=downloadVariants(stream)
