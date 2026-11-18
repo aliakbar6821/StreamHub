@@ -38,6 +38,8 @@ object DownloadFiles {
         "mov" -> "video/quicktime"; else -> "video/mp4"
     }
     suspend fun publish(context: Context, id: Long, staging: File, folder: String, name: String, checkpoint: () -> Unit): String {
+        check(staging.isFile && staging.length() > 0L) { "Download staging file is empty or missing" }
+        val expectedBytes=staging.length()
         abortPending(context, id)
         val pending = context.getSharedPreferences("dl_publication", Context.MODE_PRIVATE)
         var target: String? = null
@@ -65,6 +67,8 @@ object DownloadFiles {
                     }
                 }
                 currentCoroutineContext().ensureActive(); checkpoint()
+                val actualBytes=size(context, target)
+                check(actualBytes < 0L || actualBytes == expectedBytes) { "Downloads copy size differs from completed transfer" }
                 check(context.contentResolver.update(uri, ContentValues().apply {
                     put(MediaStore.MediaColumns.IS_PENDING, 0)
                 }, null, null) > 0) { "Could not finish Downloads file" }
@@ -87,6 +91,7 @@ object DownloadFiles {
                 }
             }
             currentCoroutineContext().ensureActive(); checkpoint()
+            check(file.length() == expectedBytes) { "Downloads copy size differs from completed transfer" }
             android.media.MediaScannerConnection.scanFile(context, arrayOf(target), arrayOf(mediaType(name)), null)
             return target
         } catch (t: Throwable) {

@@ -15,6 +15,8 @@ object OfflineMuxer {
         val v=MediaExtractor();val a=MediaExtractor();val temporary=File(output.path+".muxing.mp4")
         temporary.delete();var muxer:MediaMuxer?=null;var started=false;var complete=false
         try{
+            check(video.isFile && video.length()>0L && audio.isFile && audio.length()>0L) { "Downloaded audio/video component is empty or missing" }
+            currentCoroutineContext().ensureActive();checkpoint()
             v.setDataSource(video.path);a.setDataSource(audio.path)
             fun select(e:MediaExtractor,prefix:String):Pair<Int,MediaFormat>{
                 for(i in 0 until e.trackCount){val f=e.getTrackFormat(i)
@@ -25,6 +27,7 @@ object OfflineMuxer {
             check(vf.getString(MediaFormat.KEY_MIME) in setOf("video/avc","video/hevc")){"MP4 combining requires AVC or HEVC video"}
             check(af.getString(MediaFormat.KEY_MIME)=="audio/mp4a-latm"){"MP4 combining requires AAC audio"}
             check(vf.getInteger(MediaFormat.KEY_HEIGHT)==height){"Downloaded resolution differs from the selected quality"}
+            check(v.sampleTime>=0 && a.sampleTime>=0) { "Downloaded audio/video component has no samples" }
             val m=MediaMuxer(temporary.path,MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);muxer=m
             val vi=m.addTrack(vf);val ai=m.addTrack(af);m.start();started=true
             fun bufferSize(f:MediaFormat)=if(f.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE))f.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE) else 0
@@ -40,7 +43,7 @@ object OfflineMuxer {
                 val useVideo=a.sampleTime<0||(v.sampleTime>=0&&v.sampleTime-vb<=a.sampleTime-ab)
                 val e=if(useVideo)v else a;val base=if(useVideo)vb else ab
                 check(e.sampleFlags and MediaExtractor.SAMPLE_FLAG_ENCRYPTED==0){"Encrypted samples cannot be remuxed"}
-                buffer.clear();val size=e.readSampleData(buffer,0);check(size>=0){"Unexpected end of encoded media"}
+                buffer.clear();val size=e.readSampleData(buffer,0);check(size>0){"Empty or missing encoded sample"}
                 check(size<=capacity){"Encoded sample exceeds safe muxing buffer"}
                 val pts=(e.sampleTime-base).coerceAtLeast(0)
                 info.set(0,size,pts,if(e.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC!=0)MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
@@ -62,7 +65,7 @@ object OfflineMuxer {
             complete=true;progress(100)
         }finally{
             if(started)runCatching{muxer?.stop()}
-            runCatching{muxer?.release()};v.release();a.release()
+            runCatching{muxer?.release()};runCatching{v.release()};runCatching{a.release()}
             if(!complete)temporary.delete()
         }
     }

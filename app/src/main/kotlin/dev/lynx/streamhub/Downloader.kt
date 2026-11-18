@@ -87,6 +87,7 @@ object Downloader {
                             p.st = 2
                             if (!p.readyToPublish || !file.exists() || file.length() != p.bytes) {
                                 val mux = HlsDownloadPlans.restore(app, id)
+                                DownloadSafety.requirePlan(stream.quality, mux != null)
                                 if (mux != null) paired(app, id, p, mux, file)
                                 else if (isHls(stream)) hls(p, stream.url, stream.headers, file) { save(app, id, p) }
                                 else direct(p, stream.url, stream.headers, file) { save(app, id, p) }
@@ -107,6 +108,10 @@ object Downloader {
                                 DownloadFiles.committed(app, id)
                                 file.delete()
                                 removeStaging(app, id)
+                                requests.remove(id)
+                                listOf("dl_requests", "dl_mux").forEach { name ->
+                                    app.getSharedPreferences(name, Context.MODE_PRIVATE).edit().remove(id.toString()).apply()
+                                }
                                 p.pct = 100; p.st = 8; p.total = p.bytes
                                 save(app, id, p); setState(app, id, 8)
                             }
@@ -175,9 +180,10 @@ object Downloader {
         c.getSharedPreferences("dl_state", Context.MODE_PRIVATE).edit().putInt(id.toString(), st).apply()
     }
 
-    /** False means duplicate, access unavailable, or a separate-audio stream needing offline muxing. */
+    /** Only verified self-contained sources or prepared audio/video plans can be queued. */
     fun enqueue(context: Context, item: MediaItem, ep: Episode, s: Stream, label: String = "", sourceName: String? = null): Boolean {
         val mux = HlsDownloadPlans.get(s)
+        if (mux == null && s.quality.orEmpty().contains("[MUX]", true)) return false
         if (Store.hasDownload(ep.id) || (mux == null && (ProviderPlayback.video(s.url).audio.isNotEmpty() ||
             VerifiedStreams.cached(s)?.complete != true))) return false
         val app = context.applicationContext
@@ -257,20 +263,23 @@ object Downloader {
     // ---------- network helpers ----------
     private fun openConnection(url0: String, headers: Map<String, String>): HttpURLConnection {
         var url = url0
+        var safeHeaders = headers
         for (hop in 0 until 6) {
             val c = URL(url).openConnection() as HttpURLConnection
             c.connectTimeout = 20000
             c.readTimeout = 30000
             c.instanceFollowRedirects = false
-            val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: UA
+            val ua = safeHeaders.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: UA
             c.setRequestProperty("User-Agent", ua)
-            headers.forEach { (k, v) -> if (!k.equals("User-Agent", true)) c.setRequestProperty(k, v) }
-            val code = c.responseCode
+            safeHeaders.forEach { (k, v) -> if (!k.equals("User-Agent", true)) c.setRequestProperty(k, v) }
+            val code = try { c.responseCode } catch (failure: Exception) { c.disconnect(); throw failure }
             if (code in 300..399) {
                 val loc = c.getHeaderField("Location")
                 c.disconnect()
                 if (loc == null) throw Exception("Bad redirect")
-                url = URL(URL(url), loc).toString()
+                val next = URL(URL(url), loc).toString()
+                safeHeaders = DownloadSafety.redirectedHeaders(url, next, safeHeaders)
+                url = next
                 continue
             }
             if (code !in 200..299) {
@@ -282,9 +291,17 @@ object Downloader {
         throw Exception("Too many redirects")
     }
 
-    private fun fetchText(url: String, headers: Map<String, String>): String {
+    private fun fetchText(url: String, headers: Map<String, String>): Pair<String, String> {
         val c = openConnection(url, headers)
-        return try { c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
+        return try { c.inputStream.bufferedReader().use { reader ->
+            val text=StringBuilder();val buffer=CharArray(8192)
+            while(true){
+                val n=reader.read(buffer);if(n<0)break
+                check(text.length+n<=2_000_000){"Download playlist exceeds safe size"}
+                text.append(buffer,0,n)
+            }
+            c.url.toString() to text.toString()
+        } } finally { c.disconnect() }
     }
 
     private fun fetchBytes(url: String, headers: Map<String, String>, tries: Int = 3): ByteArray {
@@ -371,8 +388,10 @@ object Downloader {
 
     private suspend fun hls(p: Prog, url: String, headers: Map<String, String>, file: File, persist: () -> Unit) {
         checkpoint(p)
-        var pl = url
-        var body = fetchText(pl, headers)
+        fun scoped(target: String) = DownloadSafety.redirectedHeaders(url, target, headers)
+        val initial = fetchText(url, headers)
+        var pl = initial.first
+        var body = initial.second
         if (body.contains("#EXT-X-STREAM-INF")) {
             val lines = body.lines()
             var best = -1L
@@ -388,7 +407,8 @@ object Downloader {
                 }
             }
             pl = resolveUrl(pl, bestUri ?: throw Exception("Empty playlist"))
-            body = fetchText(pl, headers)
+            val child = fetchText(pl, scoped(pl))
+            pl = child.first; body = child.second
         }
         if (p.parent != null && body.lineSequence().any { it.trim() == "#EXT-X-DISCONTINUITY" })
             throw IllegalArgumentException("Discontinuous audio/video playlists cannot currently be combined safely")
@@ -420,7 +440,8 @@ object Downloader {
                 } else {
                     if (!l.contains("METHOD=AES-128")) throw Exception("Unsupported stream encryption")
                     val ku = Regex("URI=\"([^\"]+)\"").find(l)?.groupValues?.get(1) ?: throw Exception("Missing key")
-                    key = fetchBytes(resolveUrl(pl, ku), headers)
+                    val keyUrl=resolveUrl(pl, ku)
+                    key = fetchBytes(keyUrl, scoped(keyUrl))
                     iv = Regex("IV=0[xX]([0-9A-Fa-f]+)").find(l)?.groupValues?.get(1)?.let { hex ->
                         val padded = hex.padStart(32, '0')
                         ByteArray(16) { i -> padded.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
@@ -437,14 +458,14 @@ object Downloader {
         checkpoint(p)
         FileOutputStream(file, p.segments > 0).use { out ->
             if (p.segments == 0) {
-                initUrl?.let { out.write(fetchBytes(it, headers)) }
+                initUrl?.let { out.write(fetchBytes(it, scoped(it))) }
                 p.bytes = file.length()
             }
             for (batch in segs.drop(p.segments).chunked(4)) {
                 currentCoroutineContext().ensureActive()
                 checkpoint(p)
                 val parts = coroutineScope {
-                    batch.map { sg -> async(Dispatchers.IO) { segment(sg, headers) } }.awaitAll()
+                    batch.map { sg -> async(Dispatchers.IO) { segment(sg, scoped(sg.url)) } }.awaitAll()
                 }
                 // A pause during fetch stops before writing this incomplete batch.
                 checkpoint(p)

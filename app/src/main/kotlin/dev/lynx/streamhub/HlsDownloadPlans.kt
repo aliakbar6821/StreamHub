@@ -19,11 +19,8 @@ object HlsDownloadPlans {
     @Synchronized private fun remember(s:Stream,p:Plan){plans[key(s)]=p;while(plans.size>128)plans.remove(plans.keys.first())}
     private val attributes=Regex("([A-Z0-9-]+)=(\"[^\"]*\"|[^,]*)")
     private fun attrs(line:String)=attributes.findAll(line.substringAfter(':')).associate{it.groupValues[1] to it.groupValues[2].removeSurrounding("\"")}
-    private fun headers(base:String,target:String,input:Map<String,String>):Map<String,String> {
-        val from=URL(base);val to=URL(target)
-        val same=from.protocol.equals(to.protocol,true)&&from.host.equals(to.host,true)&&(if(from.port<0)from.defaultPort else from.port)==(if(to.port<0)to.defaultPort else to.port)
-        return if(same)input else input.filterKeys{!it.equals("Authorization",true)&&!it.equals("Cookie",true)&&!it.equals("Proxy-Authorization",true)}
-    }
+    private fun headers(base:String,target:String,input:Map<String,String>) =
+        DownloadSafety.redirectedHeaders(base,target,input)
     fun parse(stream:Stream,text:String):List<Plan>? {
         val lines=text.lines().map{it.trim()}
         if(lines.none{it.startsWith("#EXT-X-STREAM-INF:")})return null
