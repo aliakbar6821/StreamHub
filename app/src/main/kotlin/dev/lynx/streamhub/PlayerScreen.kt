@@ -326,8 +326,8 @@ fun PlayerScreen(
     var posMs by remember { mutableLongStateOf(0L) }
     var durMs by remember { mutableLongStateOf(0L) }
     var tracks by remember { mutableStateOf(Tracks.EMPTY) }
-    var qualityH by remember { mutableIntStateOf(if (PlayerPrefs.lockQuality) PlayerPrefs.lockedHeight else -1) }
-    var lockQuality by remember { mutableStateOf(PlayerPrefs.lockQuality) }
+    var qualityH by remember(req.localPath) { mutableIntStateOf(if (req.localPath == null && PlayerPrefs.lockQuality) PlayerPrefs.lockedHeight else -1) }
+    var lockQuality by remember(req.localPath) { mutableStateOf(req.localPath == null && PlayerPrefs.lockQuality) }
     var verifiedSources by remember(ep.id, reloadKey) { mutableStateOf<Map<String, VerifiedStreams.Result>>(emptyMap()) }
     val probeSlots = remember { kotlinx.coroutines.sync.Semaphore(1) }
     var speed by remember { mutableFloatStateOf(PlayerPrefs.speed) }
@@ -473,12 +473,17 @@ fun PlayerScreen(
     }
 
     fun setQuality(h: Int) {
+        if(req.localPath != null) {
+            exo.trackSelectionParameters=QualitySelection.forLocal(exo.trackSelectionParameters)
+            return
+        }
         qualityH = h
         PlayerPrefs.lockedHeight = if (lockQuality) h else -1
         if (h > 0 && tracks.groups.none { it.type == C.TRACK_TYPE_VIDEO }) return
         try {
             exo.trackSelectionParameters = QualitySelection.select(exo.trackSelectionParameters, tracks, h, lockQuality)
         } catch (unavailable: IllegalArgumentException) {
+            Diagnostics.failure("player.quality.unavailable",unavailable)
             exo.pause()
             error = unavailable.message
         }
@@ -672,7 +677,11 @@ fun PlayerScreen(
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo,newPosition: Player.PositionInfo,reason: Int) {
                 Diagnostics.event("player.position.change","fromMs=${oldPosition.positionMs} toMs=${newPosition.positionMs} reason=$reason")
             }
-            override fun onTracksChanged(t: Tracks) { tracks = t }
+            override fun onTracksChanged(t: Tracks) {
+                tracks = t
+                if(req.localPath!=null)Diagnostics.event("player.local.tracks",
+                    "heights=${trackOpts(t,C.TRACK_TYPE_VIDEO).map { it.height }.distinct()} audioTracks=${trackOpts(t,C.TRACK_TYPE_AUDIO).size}")
+            }
             override fun onPlayerError(e: PlaybackException) {
                 Diagnostics.failure("player.error",e)
                 val m = (e.errorCodeName + ": " + (e.message ?: "")).trim()
@@ -751,7 +760,7 @@ fun PlayerScreen(
     }
 
     // 1) collect sources for this episode (first one arrives early, others keep coming)
-    LaunchedEffect(ep.id, reloadKey) {
+    LaunchedEffect(ep.id, reloadKey, req.localPath) {
         if (req.localPath == null) {
             exo.stop()
             exo.clearMediaItems()
@@ -900,7 +909,7 @@ fun PlayerScreen(
     }
 
     // 2) play the selected source; fall back to the next one on error or stall
-    LaunchedEffect(ep.id, sourceIdx, attempt, streamsFor, streams.isEmpty(),
+    LaunchedEffect(req.localPath, ep.id, sourceIdx, attempt, streamsFor, streams.isEmpty(),
         verifiedSources[streams.getOrNull(sourceIdx)?.url]?.complete) {
         if (req.localPath == null && (streamsFor != ep.id || streams.isEmpty())) {
             return@LaunchedEffect
@@ -910,6 +919,8 @@ fun PlayerScreen(
         try {
             val lp = req.localPath
             if (lp != null) {
+                Diagnostics.event("player.local.open","streamingLockBypassed=true")
+                exo.trackSelectionParameters=QualitySelection.forLocal(exo.trackSelectionParameters)
                 val path = Store.downloads.firstOrNull { it.episodeId == ep.id }?.path ?: lp
                 exo.setMediaItem(M3Item.fromUri(DownloadFiles.uri(path)))
             } else {
@@ -1042,8 +1053,8 @@ fun PlayerScreen(
             buffering = false
         }
     }
-    LaunchedEffect(tracks, qualityH, lockQuality) {
-        if (qualityH > 0 && lockQuality) setQuality(qualityH)
+    LaunchedEffect(tracks, qualityH, lockQuality, req.localPath) {
+        if (req.localPath == null && qualityH > 0 && lockQuality) setQuality(qualityH)
     }
 
     LaunchedEffect(page, req.item.id, relatedRefresh) {
@@ -1119,6 +1130,7 @@ fun PlayerScreen(
     val qualities = (adaptiveHeights + playbackChoices.filter { it.language==selectedLanguage }.flatMap { it.heights })
         .distinct().sortedDescending()
     val qualityLabel = when {
+        req.localPath != null -> adaptiveHeights.singleOrNull()?.let { "${it}p" } ?: "Downloaded file"
         qualityH > 0 -> "${qualityH}p"
         adaptiveHeights.size > 1 -> "Auto"
         adaptiveHeights.size == 1 -> "${adaptiveHeights.first()}p"
@@ -1678,6 +1690,14 @@ fun PlayerScreen(
                                 }
 
                                 "quality" -> {
+                                    if(req.localPath != null) {
+                                        item { Text("Downloaded file · fixed quality",modifier=Modifier.padding(16.dp)) }
+                                        item { Text("Plays the saved video without a streaming quality lock. To change quality, download another version.",
+                                            modifier=Modifier.padding(horizontal=16.dp),color=MaterialTheme.colorScheme.onSurfaceVariant) }
+                                        items(adaptiveHeights.sortedDescending()) { h ->
+                                            OptionRow("${h}p",selected=true) { page="" }
+                                        }
+                                    } else {
                                     item { SheetSwitchRow("Lock selected quality", lockQuality) {
                                         lockQuality = it; PlayerPrefs.lockQuality = it
                                         error = null
@@ -1703,6 +1723,7 @@ fun PlayerScreen(
                                         item { Text("Finding more options in the background…",
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.padding(16.dp)) }
+                                    }
                                     }
                                 }
 

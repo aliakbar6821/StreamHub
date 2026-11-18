@@ -8,6 +8,9 @@ import androidx.media3.common.util.UnstableApi
 
 @UnstableApi
 object QualitySelection {
+    /** Local files must not inherit a saved streaming video override or size limit. */
+    fun forLocal(current: TrackSelectionParameters): TrackSelectionParameters = current.buildUpon()
+        .clearOverridesOfType(C.TRACK_TYPE_VIDEO).clearVideoSizeConstraints().build()
     fun select(current:TrackSelectionParameters,tracks:Tracks,height:Int,locked:Boolean):TrackSelectionParameters {
         var builder=current.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO).clearVideoSizeConstraints()
         if(height<0) return builder.build()
