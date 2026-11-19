@@ -240,6 +240,12 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
     val activationId: String get() = "cs3:" + (api.sourcePlugin ?: api.name)
     private fun requireEnabled() { check(AppPrefs.extensionEnabled(activationId)) { "Enable $name in Sources & extensions" } }
 
+    // This plugin opens an interactive Fragment; a 12s scraper deadline cancels the user's challenge.
+    val interactiveVerification: Boolean get() = api.name.contains("animepahe",true)
+    val homeDeadlineMs: Long get() = if(interactiveVerification)125_000L else 25_000L
+    private val metadataGate = kotlinx.coroutines.sync.Mutex()
+    val websiteUrl: String get() = api.mainUrl
+
     private val alternateAudio=java.util.concurrent.ConcurrentHashMap<String,String>()
     private val alternateTitles=linkedMapOf<String,Set<String>>()
     private val dubs = java.util.concurrent.ConcurrentHashMap<String, List<ShEpisode>>()
@@ -262,8 +268,11 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
         Diagnostics.event("provider.home.start","provider=$name")
         api.mainPage.take(6).map { mp ->
             async(Dispatchers.IO) {
-                withTimeoutOrNull(12_000L) {
-                    runCatching { api.getMainPage(1, MainPageRequest(mp.name, mp.data, false)) }.onFailure {
+                withTimeoutOrNull(if(interactiveVerification)120_000L else 12_000L) {
+                    runCatching {
+                        if(interactiveVerification)metadataGate.withLock { api.getMainPage(1, MainPageRequest(mp.name, mp.data, false)) }
+                        else api.getMainPage(1, MainPageRequest(mp.name, mp.data, false))
+                    }.onFailure {
                         if(it is kotlinx.coroutines.CancellationException)throw it
                         Diagnostics.failure("provider.home.error",it)
                     }.getOrNull()
@@ -285,13 +294,14 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
             Diagnostics.failure("provider.search.error",t)
             if(t is NotImplementedError)unsupported=true else if(failure==null)failure=t
         }
-        val res=withTimeoutOrNull(12_000L){
+        val res=withTimeoutOrNull(if(interactiveVerification)120_000L else 12_000L){
             runCatching{api.search(query)}.onFailure(::record).getOrNull()
                 ?: runCatching{api.search(query,page)?.items}.onFailure(::record).getOrNull()
                 ?: runCatching{api.quickSearch(query)}.onFailure(::record).getOrNull()
         }
+        if(res==null && failure==null)Diagnostics.event("provider.search.deadline","provider=$name interactive=$interactiveVerification seconds=${if(interactiveVerification)120 else 12}")
         lastSearchFailure=if(res!=null)null else failure?.let{ProviderErrors.summary(it)}
-            ?: if(unsupported)"This extension does not implement a working search method." else "Provider search timed out. Try again later."
+            ?: if(unsupported)"This extension does not implement a working search method." else "Provider search timed out. If verification was shown, complete it using Verify website in Sources & extensions, then retry."
         lastSearchNote=if(res!=null){if(res.isEmpty())"no results" else res.size.toString()} else lastSearchFailure.orEmpty()
         (res ?: emptyList()).map { it.toItem() }
     }
@@ -407,6 +417,13 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
                     val ids=listOfNotNull(episodeId,alternateAudio[episodeId]).distinct()
                     val shape=when(episodeId.trimStart().firstOrNull()){'['->"json-array";'{'->"json-object";else->"opaque-string"}
                     Diagnostics.event("provider.links.start","provider=$name pluginVersion=$version episodeVariants=${ids.size} payloadKind=$shape payloadChars=${episodeId.length}")
+                    if(Diagnostics.enabled() && shape=="json-array")runCatching {
+                        val array=org.json.JSONArray(episodeId)
+                        val hosts=(0 until array.length()).mapNotNull { i ->
+                            runCatching { java.net.URI(array.optString(i)).host }.getOrNull()
+                        }.distinct().joinToString(",")
+                        Diagnostics.event("provider.links.payload","provider=$name entries=${array.length()} hosts=$hosts")
+                    }
                     // Both requests belong to the same provider and matched episode, not another source.
                     coroutineScope { ids.map { audioEpisode -> async {
                     try {

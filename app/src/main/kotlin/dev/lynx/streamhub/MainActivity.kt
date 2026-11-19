@@ -110,6 +110,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        supportFragmentManager.registerFragmentLifecycleCallbacks(ProviderVerification.fragmentObserver,true)
         enableEdgeToEdge()
         AppPrefs.init(this)
         Store.init(this)

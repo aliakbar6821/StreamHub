@@ -800,17 +800,15 @@ fun PlayerScreen(
                 if (streamChoice(stream).height != null) delay(1200L)
                 probeSlots.acquire()
                 try {
-                    val previous = verifiedSources[streams.getOrNull(sourceIdx)?.url]
                     // A labelled file may contain another language/resolution. Verify it too.
                     val result = VerifiedStreams.inspect(context, stream)
                     Diagnostics.event("player.source.verified","complete=${result.complete} audio=${result.audio.size} languages=${result.audio.map { audioLanguageCode(it.language) ?: "und" }} heights=${result.heights} reason=${result.reason}")
+                    val currentWasVerified=verifiedSources[streams.getOrNull(sourceIdx)?.url]?.complete==true
                     verifiedSources = verifiedSources + (stream.url to result)
-                    val adaptiveUpgrade = previous?.complete == true && previous.heights.size <= 1 &&
-                        result.heights.size > 1 && exo.currentPosition < 15_000L
                     val retainsLockedQuality = !lockQuality || qualityH <= 0 || qualityH in result.heights
-                    val resultLanguages=PlaybackChoices.catalog(listOf(stream),mapOf(stream.url to result)).map { it.language }
-                    val retainsAudio=playingLanguage() in resultLanguages
-                    if (result.complete && (previous?.complete != true || (adaptiveUpgrade && retainsLockedQuality && retainsAudio))) {
+                    // Discovery verifies alternatives, but must not replace a healthy playing source.
+                    // A switch here caused a second BUFFERING cycle ~3 seconds after HiAnime started.
+                    if (PlaybackChoices.adoptDiscovered(currentWasVerified,result.complete,retainsLockedQuality)) {
                         pendingStart = exo.currentPosition.coerceAtLeast(0L)
                         sourceIdx = streams.indexOfFirst { it.url == stream.url }.coerceAtLeast(0)
                         error = null

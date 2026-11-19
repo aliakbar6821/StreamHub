@@ -15,6 +15,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/Theme.StreamHub.Host">
+        <activity android:name=".ProviderVerificationActivity" android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

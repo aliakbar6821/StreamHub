@@ -158,6 +158,34 @@ class StremioExtension(
     override val name = addon.name
     override val version = 1
 
+    private val previews = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
+
+    fun streamCapabilityNote(itemId: String): String? {
+        val token = runCatching { JSONObject(itemId) }.getOrNull() ?: return null
+        val type = token.optString("type")
+        val raw = token.optString("id")
+        return if (
+            (listOf(addon) + peers()).any {
+                enabled(it.key) && p.supports(it.manifest, "stream", type, raw)
+            }
+        )
+            null
+        else
+            "This addon lists titles. No enabled addon declares streams for this title ID. Add and enable a compatible direct-stream addon in Sources & extensions to watch or download."
+    }
+
+    fun rememberItem(item: MediaItem) {
+        val t = runCatching { JSONObject(item.id) }.getOrNull() ?: return
+        if (t.optString("addon") != id || previews.containsKey(item.id)) return
+        previews[item.id] =
+            JSONObject()
+                .put("id", t.getString("id"))
+                .put("type", t.getString("type"))
+                .put("name", item.title)
+                .put("poster", item.poster)
+                .put("description", item.description)
+    }
+
     private fun checkEnabled() {
         check(enabled(id)) { "Enable this Stremio addon in Sources & extensions" }
     }
@@ -196,6 +224,12 @@ class StremioExtension(
                     )
                     .mapNotNull { o ->
                         if (!o.has("type")) o.put("type", type)
+                        val raw = p.text(o, "id")
+                        if (raw != null) {
+                            if (previews.size >= 600)
+                                previews.keys.firstOrNull()?.let { previews.remove(it) }
+                            previews[p.token(id, type, raw)] = JSONObject(o.toString())
+                        }
                         p.item(id, o)
                     }
                     .distinctBy { it.id }
@@ -231,11 +265,22 @@ class StremioExtension(
                 throw c
             } catch (_: Exception) {}
         }
+        // A catalog-only addon is valid. Movies already have their protocol video ID;
+        // series still require real videos from metadata, never guessed season/episode IDs.
+        val preview = previews[id]
         val m =
             meta
-                ?: error(
-                    "No enabled addon returned metadata. Install a compatible metadata addon yourself."
+                ?: preview?.let { JSONObject(it.toString()) }
+                ?: throw AddonCapabilityException(
+                    "This addon supplies catalogs but no title metadata. Add and enable a compatible metadata addon in Sources & extensions. No metadata service is installed automatically."
                 )
+        if (
+            type !in listOf("movie", "tv", "channel") &&
+                p.objects(m.optJSONArray("videos")).isEmpty()
+        )
+            throw AddonCapabilityException(
+                "This catalog does not supply episode IDs. Add and enable a compatible metadata addon to load the real season and episode list."
+            )
         m.put("id", raw).put("type", type)
         val item = p.item(this.id, m) ?: error("Addon returned invalid metadata")
         val videos = p.objects(m.optJSONArray("videos"))
@@ -282,10 +327,11 @@ class StremioExtension(
         }
         checkEnabled()
         if (out.isEmpty())
-            error(
+            throw AddonCapabilityException(
                 if (unsupported)
                     "Addon returned only unsupported stream types. Direct HTTP(S) media is supported; torrents, archives, YouTube IDs and external webpages are not."
-                else "No enabled addon returned a direct media URL for this video"
+                else
+                    "No enabled addon returned a direct media URL. Catalog addons list titles but may not supply video. Add and enable a compatible direct-stream addon in Sources & extensions."
             )
         return out.distinctBy { it.url to it.headers }
     }

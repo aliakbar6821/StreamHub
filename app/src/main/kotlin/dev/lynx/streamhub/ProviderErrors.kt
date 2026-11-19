@@ -1,5 +1,7 @@
 package dev.lynx.streamhub
 
+class AddonCapabilityException(val userExplanation:String):IllegalStateException(userExplanation)
+
 object ProviderErrors {
     fun missingSymbol(error:Throwable):String? {
         val binary=Regex("[A-Za-z_$][A-Za-z0-9_$]*(?:[./][A-Za-z_$][A-Za-z0-9_$]*)+")
@@ -16,6 +18,7 @@ object ProviderErrors {
         return null
     }
     fun summary(error:Throwable):String = when {
+        error is AddonCapabilityException -> error.userExplanation
         generateSequence(error){it.cause}.take(8).any{it is LinkageError || it is ClassNotFoundException}->
             "This extension requires an unavailable/incompatible host API. Update the extension, or export diagnostics to identify the missing class."
         error is java.net.SocketTimeoutException || error is java.net.ConnectException ->

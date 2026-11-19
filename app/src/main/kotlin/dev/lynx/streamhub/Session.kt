@@ -70,7 +70,7 @@ object Session {
                     exts.map { e -> async {
                         gate.withPermit {
                             try {
-                                val sections = withTimeoutOrNull(25_000L) { e.getHome() }
+                                val sections = withTimeoutOrNull((e as? CsExtension)?.homeDeadlineMs ?: 25_000L) { e.getHome() }
                                 if (sections == null) e to Result.failure<List<HomeSection>>(
                                     IllegalStateException("Home request timed out")
                                 ) else e to Result.success(sections)

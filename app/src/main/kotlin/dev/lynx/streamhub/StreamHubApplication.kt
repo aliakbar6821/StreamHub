@@ -7,7 +7,7 @@ class StreamHubApplication: Application() {
         super.onCreate()
         Diagnostics.init(this)
         CsNetworkCompat.initialize(this)
-        Diagnostics.event("app.process.start","version=0.2.24 sdk=${android.os.Build.VERSION.SDK_INT}")
+        Diagnostics.event("app.process.start","version=0.2.25 sdk=${android.os.Build.VERSION.SDK_INT}")
         val previous=Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread,error ->
             runCatching { Diagnostics.crash(error) }

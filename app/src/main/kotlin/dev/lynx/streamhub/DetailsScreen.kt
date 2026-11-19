@@ -257,6 +257,7 @@ fun DetailsScreen(
     var confirmAll by remember { mutableStateOf(false) }
     val ext = Session.owner[media.id]?.takeIf { ExtensionLoader.isEnabled(it) } ?: Store.ownerOf(media.id)
     val last = Store.historyFor(media.id)
+    val addonNote=(ext as? StremioExtension)?.streamCapabilityNote(media.id)
 
     LaunchedEffect(media.id, detailsRetry) {
         error=null
@@ -266,7 +267,10 @@ fun DetailsScreen(
         }
         try {
             Diagnostics.event("details.load.start","provider=${ext.name}")
-            details = withContext(Dispatchers.IO) { ext.getDetails(media.id) }
+            details = withContext(Dispatchers.IO) {
+                (ext as? StremioExtension)?.rememberItem(media)
+                ext.getDetails(media.id)
+            }
             Diagnostics.event("details.load.finished")
         } catch (t: Throwable) {
             if(t is kotlinx.coroutines.CancellationException)throw t
@@ -311,6 +315,7 @@ fun DetailsScreen(
     }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
+
         item {
             Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 8.dp)) {
                 IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, contentDescription = "Back") }
@@ -426,6 +431,10 @@ fun DetailsScreen(
                 if (details == null && error == null) {
                     item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
                 }
+                addonNote?.let { note -> item {
+                    Text(note,style=MaterialTheme.typography.bodySmall,
+                        color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(16.dp))
+                } }
                 error?.let { message -> item {
                     Text(message,color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(16.dp))
                     TextButton(onClick={detailsRetry++}){Text("Retry loading title")}

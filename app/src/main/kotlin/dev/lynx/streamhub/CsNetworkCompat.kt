@@ -15,6 +15,7 @@ object CsNetworkCompat {
     @Synchronized
     fun initialize(context: Context) {
         val application = context.applicationContext
+        ProviderVerification.init(application)
         com.lagradost.cloudstream3.CloudStreamApp.setContext(application)
         // The pinned 4.8 API takes WeakReference<Any>, unlike newer upstream versions.
         com.lagradost.api.setContext(WeakReference<Any>(application))
@@ -22,7 +23,11 @@ object CsNetworkCompat {
         try {
             val previous = app.baseClient.cookieJar
             app.baseClient =
-                app.baseClient.newBuilder().cookieJar(ProviderCookieJar(previous)).build()
+                app.baseClient
+                    .newBuilder()
+                    .cookieJar(ProviderCookieJar(previous))
+                    .addNetworkInterceptor(ProviderNetworkObserver())
+                    .build()
             configured = true
             Diagnostics.event("provider.network.ready", "context=true webviewCookies=true")
         } catch (t: Exception) {

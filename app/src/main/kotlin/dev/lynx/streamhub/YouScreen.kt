@@ -178,6 +178,10 @@ fun ExtensionsScreen() {
             }
         items(installed, key = { "installed:${it.key}" }) { entry ->
             ExtensionToggle(entry, true, busy != null) { toggle(entry.key, it) }
+            val cs=Session.extensions.filterIsInstance<CsExtension>().firstOrNull { it.activationId==entry.key }
+            if(cs!=null && StremioProtocol.http(cs.websiteUrl)?.startsWith("https://")==true)TextButton(enabled=busy==null,onClick={
+                context.startActivity(android.content.Intent(context,ProviderVerificationActivity::class.java).putExtra("website",cs.websiteUrl))
+            }){Text("Verify website") }
             if (entry.key.startsWith("stremio:"))
                 TextButton(
                     enabled = busy == null,

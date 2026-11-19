@@ -6,6 +6,10 @@ import androidx.media3.common.util.UnstableApi
 /** A playable file is an option only after audio AND video have been verified. */
 @UnstableApi
 object PlaybackChoices {
+    // Alternative discovery must not reset a healthy source or override an explicit quality lock.
+    fun adoptDiscovered(currentVerified:Boolean,candidateVerified:Boolean,retainsQuality:Boolean):Boolean =
+        !currentVerified && candidateVerified && retainsQuality
+
     data class Choice(val index: Int, val language: String, val heights: List<Int>)
     fun catalog(streams: List<Stream>, verified: Map<String, VerifiedStreams.Result>): List<Choice> =
         streams.flatMapIndexed { index, stream ->
