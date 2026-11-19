@@ -20,7 +20,7 @@ object ExtensionLoader {
             pm.getInstalledPackages(PackageManager.GET_META_DATA)
         }
     }
-    fun installed(context: Context): List<InstalledExtension> = CsHost.installed(context) +
+    fun installed(context: Context): List<InstalledExtension> = CsHost.installed(context) + StremioHost.installed(context) +
         packages(context).filter { it.applicationInfo?.metaData?.getString(META_CLASS) != null }.map { pkg ->
             val app = pkg.applicationInfo!!
             @Suppress("DEPRECATION")
@@ -29,7 +29,7 @@ object ExtensionLoader {
         }
     fun loadAll(context: Context): List<Extension> = packages(context)
         .filter { AppPrefs.extensionEnabled(it.packageName) }
-        .mapNotNull { load(context, it) } + CsHost.extensions(context)
+        .mapNotNull { load(context, it) } + CsHost.extensions(context) + StremioHost.extensions(context)
 
     fun activationId(extension: Extension): String = when (extension) {
         is CsExtension -> extension.activationId

@@ -67,7 +67,7 @@ object CsHost {
         withContext(Dispatchers.IO) {
             val started = android.os.SystemClock.elapsedRealtime()
             val app = c.applicationContext
-            CloudStreamApp.setContext(app)
+            CsNetworkCompat.initialize(app)
             val k = key(e.pkg)
             val target = File(dir(app), "$k.cs3")
             val temporary = File.createTempFile("install-", ".part", dir(app))
@@ -203,7 +203,7 @@ object CsHost {
         val app = c.applicationContext
         if (com.lagradost.cloudstream3.LoadResponse.malIdPrefix.isBlank()) com.lagradost.cloudstream3.LoadResponse.malIdPrefix = "mal"
         if (com.lagradost.cloudstream3.LoadResponse.aniListIdPrefix.isBlank()) com.lagradost.cloudstream3.LoadResponse.aniListIdPrefix = "anilist"
-        CloudStreamApp.setContext(app)
+        CsNetworkCompat.initialize(app)
         val before = loaded.size
         val activeFiles = dir(app).listFiles().orEmpty().filter {
             it.extension == "cs3" && AppPrefs.extensionEnabled("cs3:${it.nameWithoutExtension}")
