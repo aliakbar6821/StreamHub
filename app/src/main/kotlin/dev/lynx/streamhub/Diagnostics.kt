@@ -58,7 +58,8 @@ object Diagnostics {
         // Exception messages can contain signed URLs, headers or user input. Never collect them.
         val chain=generateSequence(error) { it.cause }.take(5).map { it.javaClass.simpleName }.joinToString(" <- ")
         val frames=error.stackTrace.take(10).joinToString(" | ") { "${it.className}.${it.methodName}:${it.lineNumber}" }
-        event(name,"$chain | $frames")
+        val missing=ProviderErrors.missingSymbol(error)
+        event(name,"$chain"+(missing?.let { " missingClass=$it" } ?: "")+" | $frames")
     }
     @Synchronized fun crash(error: Throwable) {
         val target=journal ?: return

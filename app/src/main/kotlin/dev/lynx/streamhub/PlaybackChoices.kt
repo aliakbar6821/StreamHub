@@ -12,7 +12,7 @@ object PlaybackChoices {
             val result=verified[stream.url]
             if(result?.complete != true) emptyList() else {
                 val languages=result.audio.filter { it.supported }.map {
-                    audioLanguageCode(it.language) ?: streamChoice(stream).language ?: "original"
+                    audioLanguageCode(it.language) ?: streamChoice(stream).language ?: ProviderPlayback.video(stream.url).audioVariant ?: "original"
                 }.distinct()
                 languages.map { Choice(index,it,result.heights) }
             }

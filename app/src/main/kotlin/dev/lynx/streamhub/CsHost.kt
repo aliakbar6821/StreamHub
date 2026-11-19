@@ -240,6 +240,8 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
     val activationId: String get() = "cs3:" + (api.sourcePlugin ?: api.name)
     private fun requireEnabled() { check(AppPrefs.extensionEnabled(activationId)) { "Enable $name in Sources & extensions" } }
 
+    private val alternateAudio=java.util.concurrent.ConcurrentHashMap<String,String>()
+    private val alternateTitles=linkedMapOf<String,Set<String>>()
     private val dubs = java.util.concurrent.ConcurrentHashMap<String, List<ShEpisode>>()
 
     /** Dubbed episodes for a title, or empty when the plugin has no separate dub list. */
@@ -257,10 +259,14 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
 
     override suspend fun getHome(): List<HomeSection> = coroutineScope {
         requireEnabled()
+        Diagnostics.event("provider.home.start","provider=$name")
         api.mainPage.take(6).map { mp ->
             async(Dispatchers.IO) {
                 withTimeoutOrNull(12_000L) {
-                    runCatching { api.getMainPage(1, MainPageRequest(mp.name, mp.data, false)) }.getOrNull()
+                    runCatching { api.getMainPage(1, MainPageRequest(mp.name, mp.data, false)) }.onFailure {
+                        if(it is kotlinx.coroutines.CancellationException)throw it
+                        Diagnostics.failure("provider.home.error",it)
+                    }.getOrNull()
                 }
             }
         }.awaitAll()
@@ -271,11 +277,12 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
 
     override suspend fun search(query: String, page: Int): List<MediaItem> = withContext(Dispatchers.IO) {
         requireEnabled()
+        Diagnostics.event("provider.search.start","provider=$name page=$page")
         var err: String? = null
         val res = withTimeoutOrNull(12_000L) {
-            runCatching { api.search(query) }.onFailure { err = describe(it) }.getOrNull()
-                ?: runCatching { api.search(query, page)?.items }.onFailure { err = describe(it) }.getOrNull()
-                ?: runCatching { api.quickSearch(query) }.onFailure { err = describe(it) }.getOrNull()
+            runCatching { api.search(query) }.onFailure { if(it is kotlinx.coroutines.CancellationException)throw it;Diagnostics.failure("provider.search.error",it);err = describe(it) }.getOrNull()
+                ?: runCatching { api.search(query, page)?.items }.onFailure { if(it is kotlinx.coroutines.CancellationException)throw it;Diagnostics.failure("provider.search.error",it);err = describe(it) }.getOrNull()
+                ?: runCatching { api.quickSearch(query) }.onFailure { if(it is kotlinx.coroutines.CancellationException)throw it;Diagnostics.failure("provider.search.error",it);err = describe(it) }.getOrNull()
         }
         val e2 = err
         lastSearchNote = when {
@@ -291,7 +298,7 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
     override suspend fun getDetails(id: String): MediaDetails = withContext(Dispatchers.IO) {
         requireEnabled()
         val url = id.split("|", limit = 3).getOrNull(2) ?: id
-        val lr = withTimeoutOrNull(40_000L) { api.load(url) } ?: throw Exception("Could not load details")
+        val lr = ProviderRequests.details { api.load(url) }
         var dubRaw: List<com.lagradost.cloudstream3.Episode> = emptyList()
         var defaultAudio: String? = null
         val eps: List<com.lagradost.cloudstream3.Episode> = when (lr) {
@@ -308,6 +315,16 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
                 sub?.takeIf { it.isNotEmpty() } ?: dub?.takeIf { it.isNotEmpty() } ?: lr.episodes.values.flatten()
             }
             else -> emptyList()
+        }
+        fun entry(e:com.lagradost.cloudstream3.Episode)=EpisodeAudioPairs.Entry(e.data,e.season,e.episode)
+        val pairs=EpisodeAudioPairs.match(eps.map(::entry),dubRaw.map(::entry))
+        synchronized(alternateTitles) {
+            alternateTitles.remove(id).orEmpty().forEach { alternateAudio.remove(it) }
+            alternateAudio.putAll(pairs);alternateTitles[id]=pairs.keys.toSet()
+            while(alternateTitles.size>32){
+                val oldest=alternateTitles.keys.first()
+                alternateTitles.remove(oldest).orEmpty().forEach { alternateAudio.remove(it) }
+            }
         }
         val episodes = when {
             eps.isNotEmpty() -> eps.mapIndexed { i, e ->
@@ -385,7 +402,12 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
         withContext(Dispatchers.IO) {
             withTimeoutOrNull(90_000L) {
                 try {
-                    api.loadLinks(episodeId, false, { sub ->
+                    val ids=listOfNotNull(episodeId,alternateAudio[episodeId]).distinct()
+                    Diagnostics.event("provider.links.start","provider=$name episodeVariants=${ids.size}")
+                    // Both requests belong to the same provider and matched episode, not another source.
+                    coroutineScope { ids.map { audioEpisode -> async {
+                    try {
+                    api.loadLinks(audioEpisode, false, { sub ->
                         if (sub.url.isNotBlank()) {
                             onSubtitle(sub.lang, sub.url)
                         }
@@ -397,58 +419,37 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
                             if (!ref.isNullOrBlank() && h.keys.none { it.equals("Referer", true) }) h["Referer"] = ref
                             val q = if (l.quality > 0) l.quality.toString() + "p" else null
                             ProviderPlayback.capture(l, l.url, h)
-                            count++
-                            onStream(AudioMetadataStore.enrich(id, name, episodeId,
+                            if(ids.size>1)ProviderPlayback.rememberAudioVariant(l.url,EpisodeAudioPairs.identity(audioEpisode))
+                            synchronized(this@CsExtension){count++}
+                            onStream(AudioMetadataStore.enrich(id, name, audioEpisode,
                                 ShStream(url = l.url, quality = listOfNotNull(l.name, q).joinToString(" "), headers = h)))
                         }
                     })
+                    } catch(cancel:kotlinx.coroutines.CancellationException){throw cancel
+                    } catch(t:Throwable){
+                        Diagnostics.failure("provider.links.error",t)
+                        synchronized(this@CsExtension){err=describe(t)}
+                    }
+                    } }.awaitAll() }
                 } catch (t: Throwable) {
                     if (t is kotlinx.coroutines.CancellationException) throw t
-                    Log.w("CsHost", "loadLinks failed for " + api.name, t)
+                    Diagnostics.failure("provider.links.error",t)
                     err = describe(t)
                 }
                 finished = true
             }
         }
-        lastError = err ?: when {
+        Diagnostics.event("provider.links.finished","provider=$name links=$count completed=$finished hadError=${err!=null}")
+        lastError = if(count>0)null else err ?: when {
             !finished -> "Plugin " + api.name + " took longer than 90s and returned nothing."
             count == 0 -> "Plugin " + api.name + " finished but returned no links. Its site may be down or blocked, or it needs a feature this app lacks."
             else -> null
         }
     }
 
-    override suspend fun getStreams(episodeId: String): List<ShStream> = withContext(Dispatchers.IO) {
-        requireEnabled()
-        val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-        val job = CoroutineScope(SupervisorJob() + Dispatchers.IO).async {
-            runCatching { api.loadLinks(episodeId, false, { }, { l -> links.add(l) }) }
-        }
-        val t0 = System.currentTimeMillis()
-        var firstAt = 0L
-        try {
-        while (job.isActive) {
-            delay(250)
-            val t = System.currentTimeMillis()
-            if (firstAt == 0L && links.isNotEmpty()) firstAt = t
-            if (firstAt != 0L && t - firstAt > 5000) break
-            if (t - t0 > 60000) break
-        }
-        } finally { job.cancel() }
-        synchronized(links) { links.toList() }
-            .filter { it.url.isNotBlank() }
-            .sortedByDescending { it.quality }
-            .map { l ->
-                val ref: String? = l.referer
-                val hs: Map<String, String>? = l.headers
-                val h = HashMap<String, String>(hs.orEmpty())
-                if (!ref.isNullOrBlank() && h.keys.none { it.equals("Referer", true) }) h["Referer"] = ref
-                val q = if (l.quality > 0) l.quality.toString() + "p" else null
-                ProviderPlayback.capture(l, l.url, h)
-                AudioMetadataStore.enrich(id, name, episodeId, ShStream(
-                    url = l.url,
-                    quality = listOfNotNull(l.name, q).joinToString(" "),
-                    headers = h,
-                ))
-            }
+    override suspend fun getStreams(episodeId: String): List<ShStream> {
+        val links=Collections.synchronizedList(mutableListOf<ShStream>())
+        streamsLive(episodeId,onStream={links.add(it)})
+        return synchronized(links){links.toList().distinctBy { it.url to it.quality }}
     }
 }

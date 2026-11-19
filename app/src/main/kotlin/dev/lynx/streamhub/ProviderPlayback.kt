@@ -5,7 +5,7 @@ import org.json.JSONObject
 /** Sidecar metadata preserves the binary-compatible three-argument extension Stream API. */
 object ProviderPlayback {
     data class Audio(val url: String, val headers: Map<String, String>)
-    data class Video(val mime: String? = null, val audio: List<Audio> = emptyList(), val segments: List<SkipSegment> = emptyList())
+    data class Video(val mime: String? = null, val audio: List<Audio> = emptyList(), val segments: List<SkipSegment> = emptyList(), val audioVariant: String? = null)
     data class Episode(val season: Int?, val number: Float, val malId: Int?, val segments: List<SkipSegment>)
     private val videos = linkedMapOf<String, Video>()
     private val episodes = linkedMapOf<String, Episode>()
@@ -48,6 +48,7 @@ object ProviderPlayback {
         videos[url] = Video(mime, tracks, parseSegments(property(link, "extractorData") as? String))
         while(videos.size>256) videos.remove(videos.keys.first())
     }
+    @Synchronized fun rememberAudioVariant(url:String,variant:String) { videos[url]=video(url).copy(audioVariant=variant) }
     @Synchronized fun video(url: String): Video = videos[url] ?: Video()
     @Synchronized fun rememberEpisode(provider: String, data: String, season: Int?, number: Float, sync: Map<String,String>) {
         val mal = listOf("mal", "myanimelist", "myanimelist.net").mapNotNull { sync[it]?.toIntOrNull() }.distinct().singleOrNull()?.takeIf { it>0 }

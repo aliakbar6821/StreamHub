@@ -505,7 +505,7 @@ fun PlayerScreen(
         PlayerPrefs.lockedHeight=if(lockQuality)height else -1
         AppPrefs.setAudio(req.item.id,language)
         tweak { it.clearOverridesOfType(C.TRACK_TYPE_AUDIO).clearOverridesOfType(C.TRACK_TYPE_VIDEO)
-            .clearVideoSizeConstraints().setPreferredAudioLanguage(if(language=="original")null else language) }
+            .clearVideoSizeConstraints().setPreferredAudioLanguage(audioLanguageCode(language)) }
         error=null;sourceIdx=index;page=""
     }
     fun pickResolution(height: Int) {
@@ -750,7 +750,8 @@ fun PlayerScreen(
                     details.episodes
                 }
             } catch (cancel: CancellationException) { throw cancel
-            } catch (_: Exception) { emptyList() }
+            } catch (compat: LinkageError) { Diagnostics.failure("player.episodes.compatibility",compat);emptyList()
+            } catch (error: Exception) { Diagnostics.failure("player.episodes.error",error);emptyList() }
         } else {
             Store.downloads
                 .filter { it.item.id == req.item.id }
@@ -802,7 +803,7 @@ fun PlayerScreen(
                     val previous = verifiedSources[streams.getOrNull(sourceIdx)?.url]
                     // A labelled file may contain another language/resolution. Verify it too.
                     val result = VerifiedStreams.inspect(context, stream)
-                    Diagnostics.event("player.source.verified","complete=${result.complete} audio=${result.audio.size} heights=${result.heights}")
+                    Diagnostics.event("player.source.verified","complete=${result.complete} audio=${result.audio.size} languages=${result.audio.map { audioLanguageCode(it.language) ?: "und" }} heights=${result.heights} reason=${result.reason}")
                     verifiedSources = verifiedSources + (stream.url to result)
                     val adaptiveUpgrade = previous?.complete == true && previous.heights.size <= 1 &&
                         result.heights.size > 1 && exo.currentPosition < 15_000L
@@ -1111,15 +1112,15 @@ fun PlayerScreen(
     }).distinct()
     val audioActions = if(availableLanguages.size<=1) audioOpts.map { option ->
         AudioAction(if(audioOpts.size==1)"Original" else audioOptionLabel(option),option.selected){pickAudio(option);page=""}
-    }.groupBy { it.label }.values.map { rows -> rows.firstOrNull { it.selected } ?: rows.first() } else availableLanguages.map { language ->
-        AudioAction(audioLanguageName(language) ?: "Original",language==selectedLanguage) {
+    }.groupBy { it.label }.values.map { rows -> rows.firstOrNull { it.selected } ?: rows.first() } else availableLanguages.mapIndexed { ordinal,language ->
+        AudioAction(audioLanguageName(language) ?: if(language.startsWith("alt:"))"Audio ${ordinal+1} · language not reported" else "Original",language==selectedLanguage) {
             val native=audioOpts.firstOrNull { audioLanguageCode(it.lang)==language }
             if(native!=null){pickAudio(native);page=""} else {
                 val target=PlaybackChoices.choose(playbackChoices,language,if(lockQuality)qualityH else -1,sourceIdx)
                 if(target==null)showHud("This audio is not available at the locked resolution")
                 else if(target.index==sourceIdx){
                     tweak { it.clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                        .setPreferredAudioLanguage(if(language=="original")null else language) }
+                        .setPreferredAudioLanguage(audioLanguageCode(language)) }
                     AppPrefs.setAudio(req.item.id,language);page=""
                 } else changePlaybackSource(target.index,language,if(lockQuality)qualityH else -1)
             }

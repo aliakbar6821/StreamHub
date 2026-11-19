@@ -242,6 +242,7 @@ fun DetailsScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var detailsRetry by remember(media.id) { mutableIntStateOf(0) }
     var details by remember { mutableStateOf<MediaDetails?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var ani by remember { mutableStateOf<AniInfo?>(null) }
@@ -257,19 +258,20 @@ fun DetailsScreen(
     val ext = Session.owner[media.id]?.takeIf { ExtensionLoader.isEnabled(it) } ?: Store.ownerOf(media.id)
     val last = Store.historyFor(media.id)
 
-    LaunchedEffect(media.id) {
+    LaunchedEffect(media.id, detailsRetry) {
+        error=null
         if (ext == null) {
             error = "Extension not found. Go back and reload."
             return@LaunchedEffect
         }
         try {
-            Diagnostics.event("details.load.start")
+            Diagnostics.event("details.load.start","provider=${ext.name}")
             details = withContext(Dispatchers.IO) { ext.getDetails(media.id) }
             Diagnostics.event("details.load.finished")
         } catch (t: Throwable) {
             if(t is kotlinx.coroutines.CancellationException)throw t
             Diagnostics.failure("details.load.error",t)
-            error = t.message ?: "Failed to load"
+            error = ProviderErrors.summary(t)
         }
     }
     LaunchedEffect(media.title, aniTry) {
@@ -424,7 +426,10 @@ fun DetailsScreen(
                 if (details == null && error == null) {
                     item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
                 }
-                error?.let { item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) } }
+                error?.let { message -> item {
+                    Text(message,color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(16.dp))
+                    TextButton(onClick={detailsRetry++}){Text("Retry loading title")}
+                } }
                 items(shown) { ep ->
                     val resume = if (last != null && last.episodeId == ep.id) last.positionMs else 0L
                     EpisodeRow(media, ep, isMovie, resume, onPlay = { onPlay(ext, ep, resume) }, onDownload = { sheetEp = ep })
