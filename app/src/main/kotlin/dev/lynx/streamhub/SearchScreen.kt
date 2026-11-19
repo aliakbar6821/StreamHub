@@ -117,6 +117,7 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
     }
 
     fun doSearch(q: String) {
+        if(loading)return
         val term = q.trim()
         if (term.isEmpty()) return
         Session.query = term
@@ -149,6 +150,8 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
                                         r.forEach { Session.owner[it.id] = e }
                                         acc.addAll(r)
                                         Session.results = acc.toList()
+                                        val sourceFailure=(e as? CsExtension)?.lastSearchFailure
+                                        if(r.isEmpty() && sourceFailure!=null)errs.add("${e.name}: $sourceFailure")
                                         rep.add(e.name + ": " + (if (r.isEmpty()) ((e as? CsExtension)?.lastSearchNote?.ifEmpty { null } ?: "no results") else r.size.toString()))
                                         report = rep.joinToString("\n")
                                     }
@@ -284,7 +287,9 @@ fun SearchScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
                 }
                 val shown = Session.results.filter { Safety.allowed(it) }
                 if (!loading && shown.isEmpty()) {
-                    item { Text("No results", modifier = Modifier.padding(20.dp), fontSize = 18.sp) }
+                    item { Text(if(error!=null)"Search could not complete" else "No results", modifier = Modifier.padding(20.dp), fontSize = 18.sp) }
+                    if(report.isNotBlank())item { Text(report,modifier=Modifier.padding(horizontal=20.dp),color=MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if(error!=null)item { TextButton(onClick={doSearch(Session.query)}){Text("Retry search")} }
                 }
                 items(shown) { item -> ResultCard(item, onOpen) }
             }

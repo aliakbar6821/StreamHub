@@ -85,49 +85,29 @@ object StreamChoiceCache {
     }
 }
 
-/** Expand a self-contained HLS master into actual download resolutions.
- * Separate audio/video renditions require muxing, which our downloader does not do.
- */
-suspend fun downloadVariants(stream: Stream): Pair<List<Stream>, String?> = withContext(Dispatchers.IO) {
-    if (!isHls(stream)) return@withContext listOf(stream) to null
-    val con = URL(stream.url).openConnection() as HttpURLConnection
-    con.connectTimeout = 8000
-    con.readTimeout = 8000
-    con.setRequestProperty("User-Agent", Downloader.UA)
-    stream.headers.forEach { (k, v) -> con.setRequestProperty(k, v) }
-    try {
-        require(con.responseCode in 200..299) { "HTTP ${con.responseCode}" }
-        val text = con.inputStream.bufferedReader().use { reader ->
-            val result = StringBuilder()
-            val buffer = CharArray(8192)
-            while (true) {
-                val count = reader.read(buffer)
-                if (count < 0) break
-                require(result.length + count <= 1_000_000) { "Playlist is too large" }
-                result.append(buffer, 0, count)
-            }
-            result.toString()
+/** Self-contained renditions only; separate-audio masters are handled by HlsDownloadPlans. */
+suspend fun downloadVariants(stream: Stream): Pair<List<Stream>, String?> {
+    if(!isHls(stream))return listOf(stream) to null
+    return try {
+        val (resolved,text)=HlsInspection.read(stream)
+        if(!text.contains("#EXT-X-STREAM-INF"))return listOf(resolved.copy(quality=stream.quality)) to null
+        val lines=text.lines().map{it.trim()}
+        if(lines.any{it.startsWith("#EXT-X-MEDIA:")&&it.contains("TYPE=AUDIO")&&it.contains("URI=")})
+            return emptyList<Stream>() to "Separate audio source requires a verified matching audio/video plan."
+        val variants=mutableListOf<Stream>()
+        for(i in lines.indices){
+            val line=lines[i];if(!line.startsWith("#EXT-X-STREAM-INF:"))continue
+            val next=lines.drop(i+1).firstOrNull{it.isNotBlank()&&!it.startsWith('#')} ?: continue
+            val h=Regex("RESOLUTION=[0-9]+x([0-9]+)").find(line)?.groupValues?.get(1)?.toIntOrNull()
+            val label=resolution.replace(stream.quality.orEmpty(),"").trim()+(h?.let{" ${it}p"} ?: "")
+            val target=URL(URL(resolved.url),next).toString()
+            variants.add(stream.copy(url=target,quality=label.trim()+" [HLS]",
+                headers=DownloadSafety.redirectedHeaders(resolved.url,target,resolved.headers)))
         }
-        require(text.trimStart().startsWith("#EXTM3U")) { "Invalid HLS playlist" }
-        if (!text.contains("#EXT-X-STREAM-INF")) return@withContext listOf(stream) to null
-        val lines = text.lines().map { it.trim() }
-        if (lines.any { it.startsWith("#EXT-X-MEDIA:") &&
-                it.contains("TYPE=AUDIO") && it.contains("URI=") }) {
-            return@withContext emptyList<Stream>() to
-                "This HLS source uses separate audio/video. Downloading it needs a muxing downloader."
-        }
-        val variants = mutableListOf<Stream>()
-        for (i in lines.indices) {
-            val line = lines[i]
-            if (!line.startsWith("#EXT-X-STREAM-INF:")) continue
-            val next = lines.drop(i + 1).firstOrNull { it.isNotBlank() && !it.startsWith('#') } ?: continue
-            val h = Regex("RESOLUTION=[0-9]+x([0-9]+)").find(line)?.groupValues?.get(1)?.toIntOrNull()
-            val label = resolution.replace(stream.quality.orEmpty(), "").trim() +
-                (h?.let { " ${it}p" } ?: "")
-            variants.add(stream.copy(url = URL(URL(stream.url), next).toString(), quality = (label.trim() + " [HLS]")))
-        }
-        variants.distinctBy { it.url } to if (variants.isEmpty()) "No downloadable HLS variants reported." else null
-    } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel } catch (t: Exception) { emptyList<Stream>() to "Could not inspect HLS download: ${t.message}" } finally { con.disconnect() }
+        variants.distinctBy{it.url} to if(variants.isEmpty())"No self-contained HLS renditions reported." else null
+    }catch(cancel:kotlinx.coroutines.CancellationException){throw cancel
+    }catch(rate:HlsInspection.RateLimited){emptyList<Stream>() to rate.message
+    }catch(error:Exception){emptyList<Stream>() to "Could not inspect this HLS source. Other verified options may still be available."}
 }
 
 /** Only explicit version markers; a host name such as MegaDub is NOT an audio tag. */

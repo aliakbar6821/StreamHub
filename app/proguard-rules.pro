@@ -29,3 +29,7 @@
 -dontwarn jdk.dynalink.**
 # Nullness metadata referenced by jsoup, not an Android runtime API.
 -dontwarn org.jspecify.annotations.**
+
+# Public library APIs invoked only by external .cs3 plugin bytecode (including Log.INSTANCE).
+# They are present in library-android 4.8.0 but must not be removed or renamed by R8.
+-keep class com.lagradost.api.** { *; }

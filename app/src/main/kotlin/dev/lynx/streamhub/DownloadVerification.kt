@@ -17,7 +17,7 @@ object DownloadVerification {
         var failure=warning
         for(variant in variants) {
             val result=VerifiedStreams.inspect(context,variant)
-            if(!result.complete) { failure=result.reason;continue }
+            if(!result.complete) { Diagnostics.event("download.option.unverified",result.reason);failure=result.reason;continue }
             val heights=result.heights
             // Downloader follows a single rendition. Unexpanded adaptive masters are not a fixed-quality download.
             if(heights.size!=1) {failure="Choose a verified self-contained rendition for offline download.";continue}

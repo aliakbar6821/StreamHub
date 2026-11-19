@@ -46,35 +46,10 @@ object HlsDownloadPlans {
         }
         return output.distinctBy{listOf(it.video.url,it.audio.url,it.language)}
     }
-    private suspend fun master(stream:Stream):Pair<Stream,String> = withContext(Dispatchers.IO){
-        var current=stream
-        repeat(6){
-            val c=URL(current.url).openConnection() as HttpURLConnection
-            try{
-                c.instanceFollowRedirects=false;c.connectTimeout=8000;c.readTimeout=12000
-                c.setRequestProperty("User-Agent",Downloader.UA)
-                current.headers.forEach{(k,v)->c.setRequestProperty(k,v)}
-                val code=c.responseCode
-                if(code in listOf(301,302,303,307,308)){
-                    val next=URL(URL(current.url),c.getHeaderField("Location")?:error("Missing redirect target")).toString()
-                    check(next.startsWith("https://",true)||next.startsWith("http://",true)){"Unsupported redirect"}
-                    current=current.copy(url=next,headers=headers(current.url,next,current.headers))
-                }else{
-                    check(code in 200..299){"Cannot inspect HLS source: HTTP $code"}
-                    val text=c.inputStream.bufferedReader().use{r->
-                        val out=StringBuilder();val buffer=CharArray(8192)
-                        while(true){val n=r.read(buffer);if(n<0)break;check(out.length+n<=1_000_000){"Playlist too large"};out.append(buffer,0,n)}
-                        out.toString().also{check(it.trimStart().startsWith("#EXTM3U")){"Invalid HLS playlist"}}
-                    }
-                    return@withContext current to text
-                }
-            }finally{c.disconnect()}
-        }
-        error("Too many playlist redirects")
-    }
+    private suspend fun master(stream:Stream)=HlsInspection.read(stream)
     suspend fun options(context:Context,source:Stream):Pair<List<Stream>,String?>? {
         if(!isHls(source))return null
-        return try { prepareOptions(context, source) } catch (cancel:kotlinx.coroutines.CancellationException) { throw cancel } catch (failure:Exception) { emptyList<Stream>() to "Could not inspect separate audio/video source. Refresh source options." }
+        return try { prepareOptions(context, source) } catch (cancel:kotlinx.coroutines.CancellationException) { throw cancel } catch (rate:HlsInspection.RateLimited) { emptyList<Stream>() to rate.message } catch (failure:Exception) { emptyList<Stream>() to "Could not inspect this HLS source. Other verified options may still be available." }
     }
     private suspend fun prepareOptions(context:Context,source:Stream):Pair<List<Stream>,String?>? {
         val (resolved,text)=master(source)

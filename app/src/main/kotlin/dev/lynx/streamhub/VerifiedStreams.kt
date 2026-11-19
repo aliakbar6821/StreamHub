@@ -41,6 +41,8 @@ object VerifiedStreams {
     suspend fun inspect(context: Context, stream: Stream): Result = probeGate.withLock {
         withContext(Dispatchers.Main.immediate) {
         cached(stream)?.let { return@withContext it }
+        val cooldown=HlsInspection.remaining(stream.url)
+        if(cooldown>0)return@withContext Result(emptyList(),emptyList(),false,HlsInspection.RateLimited(cooldown).message.orEmpty())
         // Prepared but NEVER played: no focus request and zero player volume.
         val player=ExoPlayer.Builder(context.applicationContext)
             .setRenderersFactory(androidx.media3.exoplayer.DefaultRenderersFactory(context).setEnableDecoderFallback(true))
@@ -72,8 +74,14 @@ object VerifiedStreams {
                             continuation.resume(Result(audio,heights,supported,reason))
                         }
                         override fun onPlayerError(error:PlaybackException) {
+                            val http=generateSequence<Throwable>(error){it.cause}.take(12)
+                                .filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>().firstOrNull()
+                            val rate=if(http?.responseCode==429) {
+                                val retry=http.headerFields.entries.firstOrNull{it.key.equals("Retry-After",true)}?.value?.firstOrNull()
+                                HlsInspection.markRateLimit(stream.url,retry)
+                            } else 0L
                             if(continuation.isActive) continuation.resume(Result(emptyList(),emptyList(),false,
-                                "Could not verify source: ${error.errorCodeName}"))
+                                if(rate>0)HlsInspection.RateLimited(rate).message.orEmpty() else "Could not verify source: ${error.errorCodeName}"))
                         }
                     }
                     player.addListener(listener)

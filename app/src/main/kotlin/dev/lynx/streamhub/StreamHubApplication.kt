@@ -6,7 +6,7 @@ class StreamHubApplication: Application() {
     override fun onCreate() {
         super.onCreate()
         Diagnostics.init(this)
-        Diagnostics.event("app.process.start","version=0.2.21 sdk=${android.os.Build.VERSION.SDK_INT}")
+        Diagnostics.event("app.process.start","version=0.2.22 sdk=${android.os.Build.VERSION.SDK_INT}")
         val previous=Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread,error ->
             runCatching { Diagnostics.crash(error) }

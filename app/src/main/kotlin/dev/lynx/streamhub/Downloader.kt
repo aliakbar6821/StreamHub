@@ -41,7 +41,7 @@ object Downloader {
         @Volatile var paused: Boolean = false, var validator: String = "",
         var segments: Int = 0, var fingerprint: String = "", var readyToPublish: Boolean = false, var parent: Prog? = null)
     private class PauseSignal : IOException()
-    private class HttpFailure(val code: Int) : IOException("Server said HTTP $code")
+    private class HttpFailure(val code: Int,val retryAfterMs:Long?=null) : IOException("Server said HTTP $code")
     private val slots = Semaphore(2)
     private val requests = ConcurrentHashMap<Long, Stream>()
     private val cancelled = ConcurrentHashMap.newKeySet<Long>()
@@ -127,7 +127,8 @@ object Downloader {
                         Diagnostics.failure("download.network.error",io)
                         save(app, id, p)
                         if (p.paused) continue
-                        val waitMs=downloadRetryDelay(io,failures,(io as? HttpFailure)?.code) ?: throw io
+                        val baseWait=downloadRetryDelay(io,failures,(io as? HttpFailure)?.code) ?: throw io
+                        val waitMs=maxOf(baseWait,(io as? HttpFailure)?.retryAfterMs ?: 0L)
                         failures++
                         p.st = 1
                         Diagnostics.event("download.retry","id=$id attempt=$failures waitMs=$waitMs savedBytes=${p.bytes}")
@@ -277,6 +278,8 @@ object Downloader {
         var url = url0
         var safeHeaders = headers
         for (hop in 0 until 6) {
+            val cooldown=HlsInspection.remaining(url)
+            if(cooldown>0)throw HttpFailure(429,cooldown)
             val c = URL(url).openConnection() as HttpURLConnection
             c.connectTimeout = 20000
             c.readTimeout = 30000
@@ -295,8 +298,9 @@ object Downloader {
                 continue
             }
             if (code !in 200..299) {
+                val rate=if(code==429)HlsInspection.markRateLimit(url,c.getHeaderField("Retry-After")) else null
                 c.disconnect()
-                throw HttpFailure(code)
+                throw HttpFailure(code,rate)
             }
             return c
         }

@@ -44,6 +44,7 @@ fun DownloadSheet(
     var options by remember(ep.id) { mutableStateOf<List<Stream>>(emptyList()) }
     var searching by remember(ep.id) { mutableStateOf(true) }
     var preparing by remember(ep.id) { mutableIntStateOf(0) }
+    var warningDetails by remember(ep.id) { mutableStateOf(false) }
     var warnings by remember(ep.id) { mutableStateOf<List<String>>(emptyList()) }
     var language by remember(ep.id) { mutableStateOf(preferredAudioKey(AppPrefs.audio(media.id)).orEmpty()) }
     var selectedHeight by remember(ep.id) { mutableStateOf<Int?>(null) }
@@ -62,7 +63,7 @@ fun DownloadSheet(
         fun accept(raw: Stream) {
             val stream = if (ext != null) AudioMetadataStore.enrich(ext.id, ext.name, ep.id, raw) else raw
             if (!seen.add(stream.url)) return
-            if (refresh > 0) VerifiedStreams.invalidate(stream)
+            if (refresh > 0) { VerifiedStreams.invalidate(stream); HlsInspection.invalidate(stream) }
             discovered.add(stream)
             ext?.id?.let { StreamChoiceCache.put(it, ep.id, discovered) }
             preparing++
@@ -193,7 +194,14 @@ fun DownloadSheet(
                     Text("Refresh source options")
                 }
             }
-            warnings.forEach { warning ->
+            if(warnings.isNotEmpty() && options.isNotEmpty()) Text(
+                "Some other source options could not be verified. Your selected option is checked separately.",
+                color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall,
+                modifier=Modifier.padding(top=8.dp))
+            if(warnings.isNotEmpty() && options.isNotEmpty()) TextButton(onClick={warningDetails=!warningDetails}) {
+                Text(if(warningDetails)"Hide unavailable source details" else "Show unavailable source details")
+            }
+            if(options.isEmpty() || warningDetails) warnings.forEach { warning ->
                 Text(warning, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
             }

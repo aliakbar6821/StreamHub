@@ -278,20 +278,21 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
     override suspend fun search(query: String, page: Int): List<MediaItem> = withContext(Dispatchers.IO) {
         requireEnabled()
         Diagnostics.event("provider.search.start","provider=$name page=$page")
-        var err: String? = null
-        val res = withTimeoutOrNull(12_000L) {
-            runCatching { api.search(query) }.onFailure { if(it is kotlinx.coroutines.CancellationException)throw it;Diagnostics.failure("provider.search.error",it);err = describe(it) }.getOrNull()
-                ?: runCatching { api.search(query, page)?.items }.onFailure { if(it is kotlinx.coroutines.CancellationException)throw it;Diagnostics.failure("provider.search.error",it);err = describe(it) }.getOrNull()
-                ?: runCatching { api.quickSearch(query) }.onFailure { if(it is kotlinx.coroutines.CancellationException)throw it;Diagnostics.failure("provider.search.error",it);err = describe(it) }.getOrNull()
+        var failure:Throwable?=null
+        var unsupported=false
+        fun record(t:Throwable){
+            if(t is kotlinx.coroutines.CancellationException)throw t
+            Diagnostics.failure("provider.search.error",t)
+            if(t is NotImplementedError)unsupported=true else if(failure==null)failure=t
         }
-        val e2 = err
-        lastSearchNote = when {
-            !res.isNullOrEmpty() -> res.size.toString()
-            res != null -> "no results"
-            e2 != null && e2.startsWith("NotImplementedError") -> "no search support"
-            e2 != null -> e2
-            else -> "timed out"
+        val res=withTimeoutOrNull(12_000L){
+            runCatching{api.search(query)}.onFailure(::record).getOrNull()
+                ?: runCatching{api.search(query,page)?.items}.onFailure(::record).getOrNull()
+                ?: runCatching{api.quickSearch(query)}.onFailure(::record).getOrNull()
         }
+        lastSearchFailure=if(res!=null)null else failure?.let{ProviderErrors.summary(it)}
+            ?: if(unsupported)"This extension does not implement a working search method." else "Provider search timed out. Try again later."
+        lastSearchNote=if(res!=null){if(res.isEmpty())"no results" else res.size.toString()} else lastSearchFailure.orEmpty()
         (res ?: emptyList()).map { it.toItem() }
     }
 
@@ -380,6 +381,7 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
 
     /** Result of the last search(): a count, or why it returned nothing. */
     @Volatile var lastSearchNote: String = ""
+    @Volatile var lastSearchFailure: String? = null
 
     private fun describe(t: Throwable): String {
         var r: Throwable = t
