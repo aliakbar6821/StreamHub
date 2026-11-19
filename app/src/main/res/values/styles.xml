@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Native plugin dialogs need a real Material/AppCompat theme. Compose retains its own theme. -->
+    <style name="Theme.StreamHub.Host" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="colorPrimary">@color/host_accent</item>
+        <item name="colorPrimaryVariant">@color/host_accent</item>
+        <item name="colorOnPrimary">@color/host_on_accent</item>
+        <item name="colorSecondary">@color/host_accent</item>
+        <item name="colorOnSecondary">@color/host_on_accent</item>
+    </style>
+</resources>

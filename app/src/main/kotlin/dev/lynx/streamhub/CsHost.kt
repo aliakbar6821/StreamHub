@@ -405,11 +405,12 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
             withTimeoutOrNull(90_000L) {
                 try {
                     val ids=listOfNotNull(episodeId,alternateAudio[episodeId]).distinct()
-                    Diagnostics.event("provider.links.start","provider=$name episodeVariants=${ids.size}")
+                    val shape=when(episodeId.trimStart().firstOrNull()){'['->"json-array";'{'->"json-object";else->"opaque-string"}
+                    Diagnostics.event("provider.links.start","provider=$name pluginVersion=$version episodeVariants=${ids.size} payloadKind=$shape payloadChars=${episodeId.length}")
                     // Both requests belong to the same provider and matched episode, not another source.
                     coroutineScope { ids.map { audioEpisode -> async {
                     try {
-                    api.loadLinks(audioEpisode, false, { sub ->
+                    val accepted=api.loadLinks(audioEpisode, false, { sub ->
                         if (sub.url.isNotBlank()) {
                             onSubtitle(sub.lang, sub.url)
                         }
@@ -427,6 +428,7 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
                                 ShStream(url = l.url, quality = listOfNotNull(l.name, q).joinToString(" "), headers = h)))
                         }
                     })
+                    Diagnostics.event("provider.links.return","provider=$name accepted=$accepted")
                     } catch(cancel:kotlinx.coroutines.CancellationException){throw cancel
                     } catch(t:Throwable){
                         Diagnostics.failure("provider.links.error",t)
@@ -444,7 +446,7 @@ class CsExtension(private val api: MainAPI, override val version: Int = 1) : Ext
         Diagnostics.event("provider.links.finished","provider=$name links=$count completed=$finished hadError=${err!=null}")
         lastError = if(count>0)null else err ?: when {
             !finished -> "Plugin " + api.name + " took longer than 90s and returned nothing."
-            count == 0 -> "Plugin " + api.name + " finished but returned no links. Its site may be down or blocked, or it needs a feature this app lacks."
+            count == 0 -> "Plugin " + api.name + " returned no playable links. Try updating this extension and reopening the title. The app cannot play or download media until its extractor returns a URL."
             else -> null
         }
     }

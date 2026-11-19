@@ -33,3 +33,9 @@
 # Public library APIs invoked only by external .cs3 plugin bytecode (including Log.INSTANCE).
 # They are present in library-android 4.8.0 but must not be removed or renamed by R8.
 -keep class com.lagradost.api.** { *; }
+
+# .cs3 dialog bytecode invokes these library classes/members outside the APK call graph.
+-keep class androidx.appcompat.** { *; }
+-keep class androidx.fragment.** { *; }
+-keep class com.google.android.material.bottomsheet.** { *; }
+-keep class com.google.android.material.R$* { *; }

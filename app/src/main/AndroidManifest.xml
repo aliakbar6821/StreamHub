@@ -14,7 +14,7 @@
         android:label="${appLabel}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@style/Theme.StreamHub.Host">
         <activity
             android:name=".MainActivity"
             android:exported="true"

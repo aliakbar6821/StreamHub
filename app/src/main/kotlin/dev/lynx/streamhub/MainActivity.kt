@@ -2,7 +2,7 @@ package dev.lynx.streamhub
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -40,7 +40,7 @@ object DownloadNavigation {
     var request by mutableIntStateOf(0)
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
     private var afterDownloadPermission: (() -> Unit)? = null
     private val downloadPermissions = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) {
@@ -83,10 +83,22 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent); setIntent(intent); handleDownloadIntent(intent)
     }
-    override fun onResume() { super.onResume(); Diagnostics.event("activity.resume") }
+    override fun onResume() {
+        super.onResume()
+        com.lagradost.cloudstream3.CommonActivity.setActivityInstance(this)
+        Diagnostics.event("activity.resume")
+        Diagnostics.event("provider.ui.host","available=true appCompat=true")
+    }
     override fun onPause() { Diagnostics.event("activity.pause"); super.onPause() }
-    override fun onStop() { Diagnostics.event("activity.stop"); super.onStop() }
-    override fun onDestroy() { Diagnostics.event("activity.destroy"); afterDownloadPermission = null; super.onDestroy() }
+    private fun clearProviderActivity() {
+        if(com.lagradost.cloudstream3.CommonActivity.activity === this)
+            com.lagradost.cloudstream3.CommonActivity.setActivityInstance(null)
+    }
+    override fun onStop() {
+        clearProviderActivity();Diagnostics.event("provider.ui.host","available=false")
+        Diagnostics.event("activity.stop");super.onStop()
+    }
+    override fun onDestroy() { clearProviderActivity();Diagnostics.event("activity.destroy"); afterDownloadPermission = null; super.onDestroy() }
 
     override fun onPictureInPictureModeChanged(
         isInPictureInPictureMode: Boolean,
